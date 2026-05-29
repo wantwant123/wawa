@@ -114,7 +114,7 @@ final class FileFrogAppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem(title: "隐藏咕噜蛙", action: #selector(hideFrog), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "重置位置", action: #selector(resetPosition), keyEquivalent: ""))
         menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "显示/隐藏调试区域", action: #selector(toggleDebugFrame), keyEquivalent: "d"))
+        menu.addItem(NSMenuItem(title: "显示/隐藏窗口边界", action: #selector(toggleDebugFrame), keyEquivalent: "d"))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "退出 File Frog", action: #selector(quitApp), keyEquivalent: "q"))
         menu.items.forEach { $0.target = self }
@@ -167,6 +167,8 @@ final class FrogPetView: NSView {
     private var progress: Int?
     private var eyeOffset = CGPoint.zero
     private var animationTimers: [Timer] = []
+    private var renderTimer: Timer?
+    private let animationStart = Date()
     private var dragWindowStart: CGPoint?
     private var dragMouseStart: CGPoint?
     private var showsDebugFrame = ProcessInfo.processInfo.environment["FILE_FROG_DEBUG"] == "1"
@@ -180,10 +182,16 @@ final class FrogPetView: NSView {
         wantsLayer = true
         layer?.backgroundColor = NSColor.clear.cgColor
         registerForDraggedTypes([.fileURL])
+        startRenderLoop()
     }
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    deinit {
+        renderTimer?.invalidate()
+        clearTimers()
     }
 
     func toggleDebugFrame() {
@@ -199,7 +207,7 @@ final class FrogPetView: NSView {
         if showsDebugFrame {
             drawWindowDebugFrame()
         }
-        drawZones()
+        drawDropAura()
         drawFileGhost()
         drawBubble()
         drawResultCard()
@@ -354,6 +362,22 @@ final class FrogPetView: NSView {
         animationTimers.append(timer)
     }
 
+    private func startRenderLoop() {
+        let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            if stage != .idle || draggedFile != nil || capturedFile != nil {
+                needsDisplay = true
+            } else {
+                let phase = Date().timeIntervalSince(animationStart)
+                if Int(phase * 10) % 2 == 0 {
+                    needsDisplay = true
+                }
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        renderTimer = timer
+    }
+
     private func drawWindowDebugFrame() {
         NSColor(calibratedRed: 0.33, green: 0.68, blue: 0.52, alpha: 0.55).setStroke()
         let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 10, dy: 10), xRadius: 24, yRadius: 24)
@@ -362,37 +386,29 @@ final class FrogPetView: NSView {
         path.stroke()
     }
 
-    private func drawZones() {
-        guard showsDebugFrame || draggedFile != nil || stage == .detecting || stage == .readyToEat || stage == .locked else {
+    private func drawDropAura() {
+        guard draggedFile != nil || stage == .detecting || stage == .readyToEat || stage == .locked else {
             return
         }
-        let detectAlpha: CGFloat = showsDebugFrame ? 0.55 : 0.24
-        let eatAlpha: CGFloat = showsDebugFrame ? 0.72 : 0.34
-        drawEllipseZone(
-            size: CGSize(width: detectRadius * 2, height: detectRadius * 1.48),
-            color: NSColor.systemRed.withAlphaComponent(detectAlpha),
-            lineWidth: 2
-        )
-        drawEllipseZone(
-            size: CGSize(width: eatRadius * 2, height: eatRadius * 1.52),
-            color: NSColor(calibratedRed: 0.38, green: 0.82, blue: 0.0, alpha: eatAlpha),
-            lineWidth: 2
-        )
+        let ready = stage == .readyToEat || stage == .locked
+        let pulse = CGFloat((sin(Date().timeIntervalSince(animationStart) * 5.0) + 1.0) * 0.5)
+        let size = ready ? CGSize(width: 222 + pulse * 14, height: 162 + pulse * 10) : CGSize(width: 198 + pulse * 10, height: 144 + pulse * 8)
+        let aura = NSBezierPath(ovalIn: centeredRect(size: size))
 
-        if stage == .detecting || stage == .readyToEat || stage == .locked {
-            let glowColor = stage == .readyToEat || stage == .locked
-                ? NSColor(calibratedRed: 1.0, green: 0.9, blue: 0.22, alpha: 0.18)
-                : NSColor(calibratedRed: 1.0, green: 0.34, blue: 0.34, alpha: 0.10)
-            glowColor.setFill()
-            NSBezierPath(ovalIn: centeredRect(size: CGSize(width: 230, height: 172))).fill()
-        }
-    }
-
-    private func drawEllipseZone(size: CGSize, color: NSColor, lineWidth: CGFloat) {
-        color.setStroke()
-        let path = NSBezierPath(ovalIn: centeredRect(size: size))
-        path.lineWidth = lineWidth
-        path.stroke()
+        NSGraphicsContext.saveGraphicsState()
+        applyShadow(
+            color: ready
+                ? NSColor(calibratedRed: 0.65, green: 0.94, blue: 0.42, alpha: 0.42)
+                : NSColor(calibratedRed: 0.5, green: 0.82, blue: 0.78, alpha: 0.26),
+            offset: .zero,
+            blur: ready ? 32 : 24
+        )
+        (ready
+            ? NSColor(calibratedRed: 0.82, green: 1.0, blue: 0.52, alpha: 0.18)
+            : NSColor(calibratedRed: 0.62, green: 0.91, blue: 0.83, alpha: 0.12)
+        ).setFill()
+        aura.fill()
+        NSGraphicsContext.restoreGraphicsState()
     }
 
     private func centeredRect(size: CGSize) -> CGRect {
@@ -427,11 +443,11 @@ final class FrogPetView: NSView {
 
     private func drawBubble() {
         guard let message = stage.message else { return }
-        let rect = CGRect(x: frogCenter.x - 68, y: frogCenter.y - 150, width: 136, height: progress == nil ? 32 : 46)
+        let rect = CGRect(x: frogCenter.x - 64, y: frogCenter.y - 146, width: 128, height: progress == nil ? 32 : 46)
         NSGraphicsContext.saveGraphicsState()
         applyShadow(color: NSColor.black.withAlphaComponent(0.12), offset: CGSize(width: 0, height: -5), blur: 12)
-        NSColor(calibratedRed: 0.89, green: 0.99, blue: 0.77, alpha: 0.92).setFill()
-        NSBezierPath(roundedRect: rect, xRadius: 18, yRadius: 18).fill()
+        NSColor(calibratedRed: 0.93, green: 1.0, blue: 0.74, alpha: 0.94).setFill()
+        NSBezierPath(roundedRect: rect, xRadius: 16, yRadius: 16).fill()
         NSGraphicsContext.restoreGraphicsState()
         drawText(message, in: rect.insetBy(dx: 8, dy: 5), size: 13, weight: .bold, alignment: .center, color: NSColor(calibratedRed: 0.1, green: 0.25, blue: 0.18, alpha: 1))
         if let progress {
@@ -466,110 +482,178 @@ final class FrogPetView: NSView {
 
     private func drawFrog() {
         let center = frogCenter
-        let bodyRect = CGRect(x: center.x - 78, y: center.y - 48, width: 156, height: 126)
+        let phase = Date().timeIntervalSince(animationStart)
+        let breath = CGFloat(sin(phase * 2.2))
         let scale: CGFloat
         switch stage {
         case .readyToEat, .locked:
-            scale = 1.04
+            scale = 1.035
         case .gulp, .digesting, .processing, .almostDone:
-            scale = 1.06
+            scale = 1.02 + abs(breath) * 0.018
         default:
-            scale = 1.0
+            scale = 1.0 + breath * 0.012
         }
+        let squash: CGFloat = stage == .readyToEat ? 0.965 : 1.0
 
         NSGraphicsContext.saveGraphicsState()
         let transform = NSAffineTransform()
-        transform.translateX(by: center.x, yBy: center.y + 62)
-        transform.scaleX(by: scale, yBy: stage == .readyToEat ? 0.95 : scale)
-        transform.translateX(by: -center.x, yBy: -(center.y + 62))
+        transform.translateX(by: center.x, yBy: center.y + 92)
+        transform.scaleX(by: scale, yBy: scale * squash)
+        transform.translateX(by: -center.x, yBy: -(center.y + 92))
         transform.concat()
 
-        NSColor(calibratedWhite: 0, alpha: 0.12).setFill()
-        NSBezierPath(ovalIn: CGRect(x: center.x - 74, y: center.y + 82, width: 148, height: 20)).fill()
+        NSColor(calibratedWhite: 0, alpha: 0.13).setFill()
+        NSBezierPath(ovalIn: CGRect(x: center.x - 86, y: center.y + 94, width: 172, height: 24)).fill()
 
-        drawFoot(CGRect(x: center.x - 90, y: center.y + 62, width: 60, height: 34), flip: false)
-        drawFoot(CGRect(x: center.x + 30, y: center.y + 62, width: 60, height: 34), flip: true)
+        drawFoot(CGRect(x: center.x - 94, y: center.y + 72, width: 68, height: 36), flip: false)
+        drawFoot(CGRect(x: center.x + 26, y: center.y + 72, width: 68, height: 36), flip: true)
 
-        let body = NSBezierPath(roundedRect: bodyRect, xRadius: 66, yRadius: 58)
+        let body = NSBezierPath()
+        body.move(to: CGPoint(x: center.x, y: center.y - 62))
+        body.curve(
+            to: CGPoint(x: center.x - 92, y: center.y + 28),
+            controlPoint1: CGPoint(x: center.x - 56, y: center.y - 64),
+            controlPoint2: CGPoint(x: center.x - 94, y: center.y - 20)
+        )
+        body.curve(
+            to: CGPoint(x: center.x - 66, y: center.y + 96),
+            controlPoint1: CGPoint(x: center.x - 100, y: center.y + 62),
+            controlPoint2: CGPoint(x: center.x - 92, y: center.y + 86)
+        )
+        body.curve(
+            to: CGPoint(x: center.x + 66, y: center.y + 96),
+            controlPoint1: CGPoint(x: center.x - 30, y: center.y + 122),
+            controlPoint2: CGPoint(x: center.x + 30, y: center.y + 122)
+        )
+        body.curve(
+            to: CGPoint(x: center.x + 92, y: center.y + 28),
+            controlPoint1: CGPoint(x: center.x + 92, y: center.y + 86),
+            controlPoint2: CGPoint(x: center.x + 100, y: center.y + 62)
+        )
+        body.curve(
+            to: CGPoint(x: center.x, y: center.y - 62),
+            controlPoint1: CGPoint(x: center.x + 94, y: center.y - 20),
+            controlPoint2: CGPoint(x: center.x + 56, y: center.y - 64)
+        )
+        body.close()
         NSGradient(
-            starting: NSColor(calibratedRed: 0.73, green: 0.96, blue: 0.83, alpha: 1),
-            ending: NSColor(calibratedRed: 0.42, green: 0.74, blue: 0.57, alpha: 1)
-        )?.draw(in: body, angle: -72)
-        NSColor(calibratedRed: 0.29, green: 0.58, blue: 0.45, alpha: 1).setStroke()
-        body.lineWidth = 3
+            starting: NSColor(calibratedRed: 0.78, green: 0.98, blue: 0.86, alpha: 1),
+            ending: NSColor(calibratedRed: 0.40, green: 0.73, blue: 0.56, alpha: 1)
+        )?.draw(in: body, angle: -68)
+        NSColor(calibratedRed: 0.30, green: 0.61, blue: 0.47, alpha: 1).setStroke()
+        body.lineWidth = 4
         body.stroke()
 
-        drawArm(CGRect(x: center.x - 86, y: center.y + 26, width: 42, height: 58), flip: false)
-        drawArm(CGRect(x: center.x + 44, y: center.y + 26, width: 42, height: 58), flip: true)
+        let highlight = NSBezierPath(ovalIn: CGRect(x: center.x - 48, y: center.y - 26, width: 96, height: 40))
+        NSColor(calibratedRed: 0.95, green: 1.0, blue: 0.9, alpha: 0.20).setFill()
+        highlight.fill()
 
-        NSColor(calibratedRed: 0.98, green: 0.87, blue: 0.58, alpha: 1).setFill()
-        NSBezierPath(ovalIn: CGRect(x: center.x - 54, y: center.y + 30, width: 108, height: 66)).fill()
+        drawArm(CGRect(x: center.x - 91, y: center.y + 28, width: 45, height: 64), flip: false)
+        drawArm(CGRect(x: center.x + 46, y: center.y + 28, width: 45, height: 64), flip: true)
 
-        drawEye(center: CGPoint(x: center.x - 36, y: center.y - 22))
-        drawEye(center: CGPoint(x: center.x + 36, y: center.y - 22))
+        NSColor(calibratedRed: 1.0, green: 0.89, blue: 0.62, alpha: 1).setFill()
+        NSBezierPath(ovalIn: CGRect(x: center.x - 58, y: center.y + 28, width: 116, height: 72)).fill()
+        NSColor(calibratedRed: 0.89, green: 0.76, blue: 0.45, alpha: 0.28).setStroke()
+        let bellyLine = NSBezierPath()
+        bellyLine.move(to: CGPoint(x: center.x - 42, y: center.y + 58))
+        bellyLine.curve(to: CGPoint(x: center.x + 42, y: center.y + 58), controlPoint1: CGPoint(x: center.x - 18, y: center.y + 75), controlPoint2: CGPoint(x: center.x + 18, y: center.y + 75))
+        bellyLine.lineWidth = 2
+        bellyLine.lineCapStyle = .round
+        bellyLine.stroke()
 
-        NSColor(calibratedRed: 0.95, green: 0.82, blue: 0.39, alpha: 0.82).setFill()
-        NSBezierPath(ovalIn: CGRect(x: center.x - 72, y: center.y + 38, width: 26, height: 26)).fill()
-        NSBezierPath(ovalIn: CGRect(x: center.x + 46, y: center.y + 38, width: 26, height: 26)).fill()
+        drawEye(center: CGPoint(x: center.x - 39, y: center.y - 33))
+        drawEye(center: CGPoint(x: center.x + 39, y: center.y - 33))
 
-        NSColor(calibratedRed: 0.27, green: 0.55, blue: 0.42, alpha: 1).setStroke()
-        let smile = NSBezierPath()
-        smile.move(to: CGPoint(x: center.x - 34, y: center.y + 47))
-        smile.curve(to: CGPoint(x: center.x + 34, y: center.y + 47), controlPoint1: CGPoint(x: center.x - 12, y: center.y + 62), controlPoint2: CGPoint(x: center.x + 12, y: center.y + 62))
-        smile.lineWidth = 4
-        smile.lineCapStyle = .round
-        smile.stroke()
+        NSColor(calibratedRed: 0.30, green: 0.61, blue: 0.47, alpha: 0.8).setStroke()
+        let bridge = NSBezierPath()
+        bridge.move(to: CGPoint(x: center.x - 13, y: center.y - 30))
+        bridge.curve(to: CGPoint(x: center.x + 13, y: center.y - 30), controlPoint1: CGPoint(x: center.x - 5, y: center.y - 36), controlPoint2: CGPoint(x: center.x + 5, y: center.y - 36))
+        bridge.lineWidth = 4
+        bridge.lineCapStyle = .round
+        bridge.stroke()
+
+        NSColor(calibratedRed: 0.96, green: 0.78, blue: 0.40, alpha: 0.72).setFill()
+        NSBezierPath(ovalIn: CGRect(x: center.x - 72, y: center.y + 33, width: 30, height: 28)).fill()
+        NSBezierPath(ovalIn: CGRect(x: center.x + 42, y: center.y + 33, width: 30, height: 28)).fill()
+
+        NSColor(calibratedRed: 0.23, green: 0.49, blue: 0.39, alpha: 0.55).setFill()
+        NSBezierPath(ovalIn: CGRect(x: center.x - 18, y: center.y + 24, width: 5, height: 3)).fill()
+        NSBezierPath(ovalIn: CGRect(x: center.x + 13, y: center.y + 24, width: 5, height: 3)).fill()
 
         if stage == .snapping || stage == .retracting {
             drawTongue()
         }
 
+        NSColor(calibratedRed: 0.28, green: 0.55, blue: 0.42, alpha: 1).setStroke()
+        let smile = NSBezierPath()
+        smile.move(to: CGPoint(x: center.x - 35, y: center.y + 42))
+        smile.curve(to: CGPoint(x: center.x + 35, y: center.y + 42), controlPoint1: CGPoint(x: center.x - 14, y: center.y + 58), controlPoint2: CGPoint(x: center.x + 14, y: center.y + 58))
+        smile.lineWidth = 4
+        smile.lineCapStyle = .round
+        smile.stroke()
+
         NSGraphicsContext.restoreGraphicsState()
     }
 
     private func drawEye(center: CGPoint) {
-        NSColor(calibratedRed: 0.63, green: 0.9, blue: 0.76, alpha: 1).setFill()
-        let outer = NSBezierPath(ovalIn: CGRect(x: center.x - 28, y: center.y - 28, width: 56, height: 56))
+        NSColor(calibratedRed: 0.67, green: 0.93, blue: 0.78, alpha: 1).setFill()
+        let outer = NSBezierPath(ovalIn: CGRect(x: center.x - 30, y: center.y - 30, width: 60, height: 60))
         outer.fill()
-        NSColor(calibratedRed: 0.29, green: 0.58, blue: 0.45, alpha: 1).setStroke()
-        outer.lineWidth = 4
+        NSColor(calibratedRed: 0.30, green: 0.61, blue: 0.47, alpha: 1).setStroke()
+        outer.lineWidth = 5
         outer.stroke()
 
-        NSColor(calibratedRed: 0.92, green: 1, blue: 0.91, alpha: 1).setFill()
-        NSBezierPath(ovalIn: CGRect(x: center.x - 17, y: center.y - 17, width: 34, height: 34)).fill()
+        NSColor(calibratedRed: 0.94, green: 1, blue: 0.92, alpha: 1).setFill()
+        NSBezierPath(ovalIn: CGRect(x: center.x - 18, y: center.y - 18, width: 36, height: 36)).fill()
 
         NSColor(calibratedRed: 0.09, green: 0.14, blue: 0.17, alpha: 1).setFill()
-        NSBezierPath(ovalIn: CGRect(x: center.x - 9 + eyeOffset.x, y: center.y - 9 + eyeOffset.y, width: 18, height: 18)).fill()
+        NSBezierPath(ovalIn: CGRect(x: center.x - 10 + eyeOffset.x, y: center.y - 10 + eyeOffset.y, width: 20, height: 20)).fill()
+        NSColor(calibratedRed: 0.24, green: 0.36, blue: 0.38, alpha: 0.95).setFill()
+        NSBezierPath(ovalIn: CGRect(x: center.x - 5 + eyeOffset.x, y: center.y - 4 + eyeOffset.y, width: 8, height: 8)).fill()
         NSColor.white.setFill()
-        NSBezierPath(ovalIn: CGRect(x: center.x - 8 + eyeOffset.x, y: center.y - 10 + eyeOffset.y, width: 7, height: 7)).fill()
+        NSBezierPath(ovalIn: CGRect(x: center.x - 8 + eyeOffset.x, y: center.y - 11 + eyeOffset.y, width: 8, height: 8)).fill()
+        NSBezierPath(ovalIn: CGRect(x: center.x + 3 + eyeOffset.x, y: center.y + 4 + eyeOffset.y, width: 4, height: 4)).fill()
     }
 
     private func drawFoot(_ rect: CGRect, flip: Bool) {
-        NSColor(calibratedRed: 0.45, green: 0.75, blue: 0.58, alpha: 1).setFill()
+        NSColor(calibratedRed: 0.45, green: 0.77, blue: 0.59, alpha: 1).setFill()
         let foot = NSBezierPath(roundedRect: rect, xRadius: 22, yRadius: 14)
         foot.fill()
-        NSColor(calibratedRed: 0.29, green: 0.58, blue: 0.45, alpha: 1).setStroke()
+        let toeY = rect.maxY - 8
+        let firstToeX = flip ? rect.maxX - 26 : rect.minX + 10
+        for index in 0..<3 {
+            let toeX = firstToeX + CGFloat(index) * (flip ? -11 : 11)
+            NSBezierPath(ovalIn: CGRect(x: toeX, y: toeY, width: 13, height: 8)).fill()
+        }
+        NSColor(calibratedRed: 0.30, green: 0.61, blue: 0.47, alpha: 1).setStroke()
         foot.lineWidth = 3
         foot.stroke()
     }
 
     private func drawArm(_ rect: CGRect, flip: Bool) {
-        NSColor(calibratedRed: 0.55, green: 0.84, blue: 0.68, alpha: 1).setFill()
+        NSColor(calibratedRed: 0.57, green: 0.86, blue: 0.70, alpha: 1).setFill()
         let arm = NSBezierPath(roundedRect: rect, xRadius: 20, yRadius: 24)
         arm.fill()
-        NSColor(calibratedRed: 0.29, green: 0.58, blue: 0.45, alpha: 1).setStroke()
+        NSColor(calibratedRed: 0.30, green: 0.61, blue: 0.47, alpha: 1).setStroke()
         arm.lineWidth = 3
         arm.stroke()
     }
 
     private func drawTongue() {
-        NSColor(calibratedRed: 0.95, green: 0.43, blue: 0.54, alpha: 1).setStroke()
+        let target = ghostPoint ?? CGPoint(x: frogCenter.x - 176, y: frogCenter.y - 86)
+        NSColor(calibratedRed: 0.96, green: 0.43, blue: 0.55, alpha: 1).setStroke()
         let tongue = NSBezierPath()
-        tongue.move(to: CGPoint(x: frogCenter.x - 14, y: frogCenter.y + 25))
-        tongue.curve(to: CGPoint(x: frogCenter.x - 180, y: frogCenter.y - 90), controlPoint1: CGPoint(x: frogCenter.x - 74, y: frogCenter.y + 18), controlPoint2: CGPoint(x: frogCenter.x - 132, y: frogCenter.y - 50))
-        tongue.lineWidth = 16
+        tongue.move(to: CGPoint(x: frogCenter.x - 4, y: frogCenter.y + 37))
+        tongue.curve(
+            to: target,
+            controlPoint1: CGPoint(x: frogCenter.x - 44, y: frogCenter.y + 26),
+            controlPoint2: CGPoint(x: (frogCenter.x + target.x) / 2, y: target.y + 18)
+        )
+        tongue.lineWidth = stage == .snapping ? 15 : 11
         tongue.lineCapStyle = .round
         tongue.stroke()
+        NSColor(calibratedRed: 1.0, green: 0.62, blue: 0.68, alpha: 1).setFill()
+        NSBezierPath(ovalIn: CGRect(x: target.x - 8, y: target.y - 6, width: 16, height: 12)).fill()
     }
 
     private func applyShadow(color: NSColor, offset: CGSize, blur: CGFloat) {
