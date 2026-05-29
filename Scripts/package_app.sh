@@ -35,7 +35,6 @@ cd "$BUILD_DIR"
   -volname "File Frog" \
   -size 80m \
   -fs HFS+ \
-  -format UDRW \
   -ov \
   "$DMG_RW_PATH"
 
@@ -67,12 +66,9 @@ APPLESCRIPT
 
 sync
 /usr/bin/hdiutil detach "$DMG_MOUNT"
-/usr/bin/hdiutil create \
-  -volname "File Frog" \
-  -srcdevice "$DMG_RW_PATH" \
-  -ov \
+/usr/bin/hdiutil convert "$DMG_RW_PATH" \
   -format UDZO \
-  "$DMG_PATH"
+  -o "$DMG_PATH"
 rm -rf "$DMG_MOUNT" "$DMG_RW_PATH"
 
 echo "Packaged: $DMG_PATH"
