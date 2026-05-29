@@ -14,7 +14,8 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "FileFrogNative",
-            path: "Sources/FileFrogNative"
+            path: "Sources/FileFrogNative",
+            exclude: ["Info.plist"]
         )
     ],
     swiftLanguageVersions: [.v5]
