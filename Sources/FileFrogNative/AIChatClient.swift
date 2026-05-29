@@ -26,6 +26,10 @@ struct AIChatClient {
 
     let settings: AppSettings
 
+    func testConnection() async throws -> String {
+        try await complete(prompt: "你是谁？请用一句话回答。")
+    }
+
     func complete(prompt: String) async throws -> String {
         guard !settings.aiAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw DocumentProcessingError.failed("还没有填写 AI API Key")

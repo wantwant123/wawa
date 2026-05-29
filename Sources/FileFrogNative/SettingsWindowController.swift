@@ -2,6 +2,7 @@ import AppKit
 
 final class SettingsWindowController: NSWindowController {
     private let store: SettingsStore
+    private var testTask: Task<Void, Never>?
     private let enginePopup = NSPopUpButton()
     private let endpointField = NSTextField()
     private let modelField = NSTextField()
@@ -25,6 +26,10 @@ final class SettingsWindowController: NSWindowController {
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    deinit {
+        testTask?.cancel()
     }
 
     func show() {
@@ -82,6 +87,7 @@ final class SettingsWindowController: NSWindowController {
 
         statusLabel.font = .systemFont(ofSize: 12)
         statusLabel.textColor = .secondaryLabelColor
+        statusLabel.lineBreakMode = .byTruncatingTail
         statusLabel.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(statusLabel)
 
@@ -91,6 +97,13 @@ final class SettingsWindowController: NSWindowController {
         save.bezelStyle = .rounded
         save.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(save)
+
+        let test = CallbackButton(title: "测试连接") { [weak self] in
+            self?.testConnection()
+        }
+        test.bezelStyle = .rounded
+        test.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(test)
 
         NSLayoutConstraint.activate([
             title.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 24),
@@ -125,7 +138,10 @@ final class SettingsWindowController: NSWindowController {
             note.topAnchor.constraint(equalTo: apiKeyLabel.bottomAnchor, constant: 26),
 
             statusLabel.leadingAnchor.constraint(equalTo: title.leadingAnchor),
+            statusLabel.trailingAnchor.constraint(lessThanOrEqualTo: test.leadingAnchor, constant: -10),
             statusLabel.centerYAnchor.constraint(equalTo: save.centerYAnchor),
+            test.trailingAnchor.constraint(equalTo: save.leadingAnchor, constant: -10),
+            test.centerYAnchor.constraint(equalTo: save.centerYAnchor),
             save.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -24),
             save.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -22)
         ])
@@ -141,21 +157,57 @@ final class SettingsWindowController: NSWindowController {
     }
 
     private func saveSettings() {
+        let settings = currentSettings()
+
+        do {
+            try store.save(settings)
+            statusLabel.textColor = .secondaryLabelColor
+            statusLabel.stringValue = "已保存"
+        } catch {
+            statusLabel.textColor = .systemRed
+            statusLabel.stringValue = "保存失败：\(error.localizedDescription)"
+        }
+    }
+
+    private func testConnection() {
+        testTask?.cancel()
+        let settings = currentSettings()
+        statusLabel.textColor = .secondaryLabelColor
+
+        guard !settings.aiAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            statusLabel.textColor = .systemOrange
+            statusLabel.stringValue = "先填 API Key"
+            return
+        }
+
+        statusLabel.stringValue = "正在测试..."
+        testTask = Task { [weak self] in
+            do {
+                let response = try await AIChatClient(settings: settings).testConnection()
+                if Task.isCancelled { return }
+                await MainActor.run {
+                    self?.statusLabel.textColor = .systemGreen
+                    self?.statusLabel.stringValue = "连接正常：\(response)"
+                }
+            } catch {
+                if Task.isCancelled { return }
+                await MainActor.run {
+                    self?.statusLabel.textColor = .systemRed
+                    self?.statusLabel.stringValue = "连接失败：\(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    private func currentSettings() -> AppSettings {
         let selected = SummaryEngine.allCases[safe: enginePopup.indexOfSelectedItem] ?? .localRules
-        let settings = AppSettings(
+        return AppSettings(
             schemaVersion: AppSettings.currentSchemaVersion,
             summaryEngine: selected,
             aiEndpoint: endpointField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines),
             aiModel: modelField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines),
             aiAPIKey: apiKeyField.stringValue
         ).normalized
-
-        do {
-            try store.save(settings)
-            statusLabel.stringValue = "已保存"
-        } catch {
-            statusLabel.stringValue = "保存失败：\(error.localizedDescription)"
-        }
     }
 
     private func label(_ text: String, size: CGFloat, weight: NSFont.Weight, color: NSColor = .labelColor) -> NSTextField {

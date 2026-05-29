@@ -1,16 +1,27 @@
 import AppKit
 
 final class WorkspaceWindowController: NSWindowController {
+    private struct QATurn {
+        let question: String
+        let answer: String
+        let source: String
+    }
+
     private let store: DocumentStore
     private let settingsStore: SettingsStore
     private let focusPet: () -> Void
     private var currentDocument: ProcessedDocument?
     private var answerTask: Task<Void, Never>?
+    private var qaTurns: [QATurn] = []
     private var historyStack = NSStackView()
     private var overviewText = NSTextView()
     private var documentActionStack = NSStackView()
     private var detailText = NSTextView()
     private var questionStack = NSStackView()
+    private var questionInputField = NSTextField()
+    private var qaStatusLabel = NSTextField(labelWithString: "")
+    private weak var sendQuestionButton: NSButton?
+    private weak var cancelQuestionButton: NSButton?
     private var answerText = NSTextView()
 
     init(store: DocumentStore, settingsStore: SettingsStore, focusPet: @escaping () -> Void) {
@@ -116,10 +127,15 @@ final class WorkspaceWindowController: NSWindowController {
         questionStack.orientation = .vertical
         questionStack.spacing = 8
         answerText = textView()
+        qaStatusLabel.font = .systemFont(ofSize: 11, weight: .regular)
+        qaStatusLabel.textColor = .secondaryLabelColor
+        qaStatusLabel.translatesAutoresizingMaskIntoConstraints = false
         right.addSubview(scrollView(for: overviewText))
         right.addSubview(documentActionStack)
         right.addSubview(label("推荐问题", size: 14, weight: .semibold))
         right.addSubview(questionStack)
+        right.addSubview(questionComposer())
+        right.addSubview(qaStatusLabel)
         right.addSubview(scrollView(for: answerText))
 
         layoutMainPanel(middle)
@@ -156,10 +172,15 @@ final class WorkspaceWindowController: NSWindowController {
     }
 
     private func renderCurrentDocument() {
+        answerTask?.cancel()
+        setAnswering(false, status: "")
+
         guard let document = currentDocument else {
             overviewText.string = "把 PDF、TXT 或 Markdown 拖给咕噜蛙，它会在这里整理结果。"
             detailText.string = "暂无文档"
-            answerText.string = ""
+            qaTurns.removeAll()
+            renderQAHistory(emptyMessage: "暂无问答")
+            updateQAStatus()
             renderDocumentActions(nil)
             renderQuestions([])
             return
@@ -167,7 +188,9 @@ final class WorkspaceWindowController: NSWindowController {
 
         overviewText.string = overview(for: document)
         detailText.string = details(for: document)
-        answerText.string = "点击上方问题，咕噜蛙会基于本地摘要给出回答。"
+        qaTurns.removeAll()
+        renderQAHistory(emptyMessage: "可以点击推荐问题，也可以直接输入你想问的内容。")
+        updateQAStatus()
         renderDocumentActions(document)
         renderQuestions(document.summary.suggestedQuestions)
     }
@@ -206,7 +229,7 @@ final class WorkspaceWindowController: NSWindowController {
 
         for question in questions {
             let button = CallbackButton(title: question) { [weak self] in
-                self?.answer(question)
+                self?.submitQuestion(question)
             }
             button.alignment = .left
             button.bezelStyle = .rounded
@@ -214,33 +237,95 @@ final class WorkspaceWindowController: NSWindowController {
         }
     }
 
-    private func answer(_ question: String) {
+    private func submitCurrentQuestion() {
+        submitQuestion(questionInputField.stringValue)
+    }
+
+    private func submitQuestion(_ rawQuestion: String) {
         guard let document = currentDocument else { return }
+        let question = rawQuestion.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !question.isEmpty else {
+            qaStatusLabel.stringValue = "先输入一个问题"
+            return
+        }
+
+        questionInputField.stringValue = ""
         answerTask?.cancel()
 
         let settings = settingsStore.load()
         if settings.summaryEngine == .ai, !settings.aiAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            answerText.string = "咕噜蛙正在问 AI..."
+            setAnswering(true, status: "正在使用 DeepSeek AI 回答...")
             answerTask = Task { [weak self] in
                 guard let self else { return }
                 do {
                     let response = try await self.aiAnswer(question: question, document: document, settings: settings)
                     if Task.isCancelled { return }
                     await MainActor.run {
-                        self.answerText.string = response
+                        self.qaTurns.append(QATurn(question: question, answer: response, source: "DeepSeek AI"))
+                        self.renderQAHistory()
+                        self.setAnswering(false, status: "AI 回答完成")
                     }
                 } catch {
                     if Task.isCancelled { return }
                     await MainActor.run {
-                        self.answerText.string = self.localAnswer(question, document: document)
-                            + "\n\nAI 暂时没答上：\(error.localizedDescription)"
+                        let fallback = self.localAnswer(question, document: document)
+                        self.qaTurns.append(
+                            QATurn(
+                                question: question,
+                                answer: fallback + "\n\nAI 暂时没答上：\(error.localizedDescription)",
+                                source: "本地回退"
+                            )
+                        )
+                        self.renderQAHistory()
+                        self.setAnswering(false, status: "AI 失败，已回退本地回答")
                     }
                 }
             }
             return
         }
 
-        answerText.string = localAnswer(question, document: document)
+        qaTurns.append(QATurn(question: question, answer: localAnswer(question, document: document), source: "本地规则"))
+        renderQAHistory()
+        updateQAStatus()
+    }
+
+    private func cancelAnswer() {
+        answerTask?.cancel()
+        setAnswering(false, status: "已取消当前问答")
+    }
+
+    private func setAnswering(_ isAnswering: Bool, status: String) {
+        sendQuestionButton?.isEnabled = !isAnswering
+        cancelQuestionButton?.isEnabled = isAnswering
+        qaStatusLabel.stringValue = status
+    }
+
+    private func updateQAStatus() {
+        let settings = settingsStore.load()
+        if settings.summaryEngine == .ai {
+            qaStatusLabel.stringValue = settings.aiAPIKey.isEmpty ? "DeepSeek AI 未配置 Key，将使用本地回答" : "DeepSeek AI 已启用"
+        } else {
+            qaStatusLabel.stringValue = "当前使用本地规则回答"
+        }
+        sendQuestionButton?.isEnabled = true
+        cancelQuestionButton?.isEnabled = false
+    }
+
+    private func renderQAHistory(emptyMessage: String = "暂无问答") {
+        guard !qaTurns.isEmpty else {
+            answerText.string = emptyMessage
+            return
+        }
+
+        answerText.string = qaTurns.enumerated()
+            .map { index, turn in
+                """
+                Q\(index + 1) · \(turn.question)
+                \(turn.source)
+                \(turn.answer)
+                """
+            }
+            .joined(separator: "\n\n")
     }
 
     private func localAnswer(_ question: String, document: ProcessedDocument) -> String {
@@ -431,6 +516,43 @@ final class WorkspaceWindowController: NSWindowController {
         return row
     }
 
+    private func questionComposer() -> NSView {
+        let row = NSStackView()
+        row.orientation = .horizontal
+        row.spacing = 8
+        row.translatesAutoresizingMaskIntoConstraints = false
+
+        questionInputField.placeholderString = "问这份文件..."
+        questionInputField.font = .systemFont(ofSize: 13)
+        questionInputField.translatesAutoresizingMaskIntoConstraints = false
+        questionInputField.target = self
+        questionInputField.action = #selector(submitQuestionFromField)
+        row.addArrangedSubview(questionInputField)
+
+        let send = CallbackButton(title: "发送") { [weak self] in
+            self?.submitCurrentQuestion()
+        }
+        send.bezelStyle = .rounded
+        send.widthAnchor.constraint(equalToConstant: 58).isActive = true
+        row.addArrangedSubview(send)
+        sendQuestionButton = send
+
+        let cancel = CallbackButton(title: "取消") { [weak self] in
+            self?.cancelAnswer()
+        }
+        cancel.bezelStyle = .rounded
+        cancel.isEnabled = false
+        cancel.widthAnchor.constraint(equalToConstant: 58).isActive = true
+        row.addArrangedSubview(cancel)
+        cancelQuestionButton = cancel
+
+        return row
+    }
+
+    @objc private func submitQuestionFromField() {
+        submitCurrentQuestion()
+    }
+
     private func textView() -> NSTextView {
         let view = NSTextView()
         view.isEditable = false
@@ -488,20 +610,24 @@ final class WorkspaceWindowController: NSWindowController {
     }
 
     private func layoutRightPanel(_ panel: NSView) {
-        guard panel.subviews.count == 5,
+        guard panel.subviews.count == 7,
               let overview = panel.subviews[0] as? NSScrollView,
               let actions = panel.subviews[1] as? NSStackView,
               let title = panel.subviews[2] as? NSTextField,
               let questions = panel.subviews[3] as? NSStackView,
-              let answer = panel.subviews[4] as? NSScrollView else { return }
+              let composer = panel.subviews[4] as? NSStackView,
+              let status = panel.subviews[5] as? NSTextField,
+              let answer = panel.subviews[6] as? NSScrollView else { return }
         actions.translatesAutoresizingMaskIntoConstraints = false
         title.translatesAutoresizingMaskIntoConstraints = false
         questions.translatesAutoresizingMaskIntoConstraints = false
+        composer.translatesAutoresizingMaskIntoConstraints = false
+        status.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
             overview.leadingAnchor.constraint(equalTo: panel.leadingAnchor),
             overview.trailingAnchor.constraint(equalTo: panel.trailingAnchor),
             overview.topAnchor.constraint(equalTo: panel.topAnchor),
-            overview.heightAnchor.constraint(equalToConstant: 190),
+            overview.heightAnchor.constraint(equalToConstant: 150),
             actions.leadingAnchor.constraint(equalTo: panel.leadingAnchor, constant: 12),
             actions.trailingAnchor.constraint(equalTo: panel.trailingAnchor, constant: -12),
             actions.topAnchor.constraint(equalTo: overview.bottomAnchor, constant: 10),
@@ -511,9 +637,16 @@ final class WorkspaceWindowController: NSWindowController {
             questions.leadingAnchor.constraint(equalTo: panel.leadingAnchor, constant: 12),
             questions.trailingAnchor.constraint(equalTo: panel.trailingAnchor, constant: -12),
             questions.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 8),
+            composer.leadingAnchor.constraint(equalTo: panel.leadingAnchor, constant: 12),
+            composer.trailingAnchor.constraint(equalTo: panel.trailingAnchor, constant: -12),
+            composer.topAnchor.constraint(equalTo: questions.bottomAnchor, constant: 12),
+            composer.heightAnchor.constraint(equalToConstant: 30),
+            status.leadingAnchor.constraint(equalTo: panel.leadingAnchor, constant: 14),
+            status.trailingAnchor.constraint(equalTo: panel.trailingAnchor, constant: -14),
+            status.topAnchor.constraint(equalTo: composer.bottomAnchor, constant: 6),
             answer.leadingAnchor.constraint(equalTo: panel.leadingAnchor),
             answer.trailingAnchor.constraint(equalTo: panel.trailingAnchor),
-            answer.topAnchor.constraint(equalTo: questions.bottomAnchor, constant: 14),
+            answer.topAnchor.constraint(equalTo: status.bottomAnchor, constant: 8),
             answer.bottomAnchor.constraint(equalTo: panel.bottomAnchor)
         ])
     }
