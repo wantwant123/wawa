@@ -117,6 +117,7 @@ final class FrogPetView: NSView {
     private var animationTimers: [Timer] = []
     private var dragWindowStart: CGPoint?
     private var dragMouseStart: CGPoint?
+    private let showsDebugFrame = ProcessInfo.processInfo.environment["FILE_FROG_DEBUG"] == "1"
 
     override var isFlipped: Bool {
         true
@@ -138,7 +139,9 @@ final class FrogPetView: NSView {
         NSColor.clear.setFill()
         dirtyRect.fill()
 
-        drawWindowDebugFrame()
+        if showsDebugFrame {
+            drawWindowDebugFrame()
+        }
         drawZones()
         drawFileGhost()
         drawBubble()
@@ -303,14 +306,19 @@ final class FrogPetView: NSView {
     }
 
     private func drawZones() {
+        guard showsDebugFrame || draggedFile != nil || stage == .detecting || stage == .readyToEat || stage == .locked else {
+            return
+        }
+        let detectAlpha: CGFloat = showsDebugFrame ? 0.55 : 0.24
+        let eatAlpha: CGFloat = showsDebugFrame ? 0.72 : 0.34
         drawEllipseZone(
             size: CGSize(width: detectRadius * 2, height: detectRadius * 1.48),
-            color: NSColor.systemRed.withAlphaComponent(0.88),
+            color: NSColor.systemRed.withAlphaComponent(detectAlpha),
             lineWidth: 2
         )
         drawEllipseZone(
             size: CGSize(width: eatRadius * 2, height: eatRadius * 1.52),
-            color: NSColor(calibratedRed: 0.38, green: 0.82, blue: 0.0, alpha: 0.95),
+            color: NSColor(calibratedRed: 0.38, green: 0.82, blue: 0.0, alpha: eatAlpha),
             lineWidth: 2
         )
 
@@ -362,9 +370,12 @@ final class FrogPetView: NSView {
 
     private func drawBubble() {
         guard let message = stage.message else { return }
-        let rect = CGRect(x: frogCenter.x - 78, y: frogCenter.y - 164, width: 156, height: progress == nil ? 34 : 48)
-        NSColor(calibratedRed: 0.88, green: 0.98, blue: 0.72, alpha: 0.94).setFill()
+        let rect = CGRect(x: frogCenter.x - 68, y: frogCenter.y - 150, width: 136, height: progress == nil ? 32 : 46)
+        NSGraphicsContext.saveGraphicsState()
+        applyShadow(color: NSColor.black.withAlphaComponent(0.12), offset: CGSize(width: 0, height: -5), blur: 12)
+        NSColor(calibratedRed: 0.89, green: 0.99, blue: 0.77, alpha: 0.92).setFill()
         NSBezierPath(roundedRect: rect, xRadius: 18, yRadius: 18).fill()
+        NSGraphicsContext.restoreGraphicsState()
         drawText(message, in: rect.insetBy(dx: 8, dy: 5), size: 13, weight: .bold, alignment: .center, color: NSColor(calibratedRed: 0.1, green: 0.25, blue: 0.18, alpha: 1))
         if let progress {
             drawText("\(progress)%", in: rect.insetBy(dx: 8, dy: 24), size: 11, weight: .bold, alignment: .center, color: NSColor(calibratedRed: 0.36, green: 0.48, blue: 0.12, alpha: 1))
@@ -373,17 +384,27 @@ final class FrogPetView: NSView {
 
     private func drawResultCard() {
         guard stage == .resultReady, let file = capturedFile else { return }
-        let rect = CGRect(x: frogCenter.x - 226, y: frogCenter.y - 186, width: 238, height: 132)
+        let rect = CGRect(x: frogCenter.x - 196, y: frogCenter.y - 168, width: 214, height: 112)
         NSGraphicsContext.saveGraphicsState()
-        applyShadow(color: NSColor.black.withAlphaComponent(0.2), offset: CGSize(width: 0, height: -10), blur: 22)
-        NSColor(calibratedRed: 0.83, green: 0.98, blue: 0.55, alpha: 0.96).setFill()
-        NSBezierPath(roundedRect: rect, xRadius: 22, yRadius: 18).fill()
+        applyShadow(color: NSColor.black.withAlphaComponent(0.16), offset: CGSize(width: 0, height: -8), blur: 18)
+        let card = NSBezierPath()
+        card.move(to: CGPoint(x: rect.minX + 18, y: rect.midY))
+        card.curve(to: CGPoint(x: rect.minX + 62, y: rect.minY + 10), controlPoint1: CGPoint(x: rect.minX + 28, y: rect.minY + 26), controlPoint2: CGPoint(x: rect.minX + 42, y: rect.minY + 10))
+        card.line(to: CGPoint(x: rect.maxX - 28, y: rect.minY + 10))
+        card.curve(to: CGPoint(x: rect.maxX - 12, y: rect.midY + 4), controlPoint1: CGPoint(x: rect.maxX - 8, y: rect.minY + 22), controlPoint2: CGPoint(x: rect.maxX - 4, y: rect.midY - 4))
+        card.curve(to: CGPoint(x: rect.maxX - 54, y: rect.maxY - 8), controlPoint1: CGPoint(x: rect.maxX - 26, y: rect.maxY - 2), controlPoint2: CGPoint(x: rect.maxX - 40, y: rect.maxY))
+        card.line(to: CGPoint(x: rect.minX + 54, y: rect.maxY - 10))
+        card.curve(to: CGPoint(x: rect.minX + 18, y: rect.midY), controlPoint1: CGPoint(x: rect.minX + 30, y: rect.maxY - 10), controlPoint2: CGPoint(x: rect.minX + 12, y: rect.maxY - 4))
+        card.close()
+        NSGradient(
+            starting: NSColor(calibratedRed: 0.88, green: 1.0, blue: 0.62, alpha: 0.96),
+            ending: NSColor(calibratedRed: 0.66, green: 0.9, blue: 0.38, alpha: 0.94)
+        )?.draw(in: card, angle: -18)
         NSGraphicsContext.restoreGraphicsState()
 
-        drawText("理解完成", in: CGRect(x: rect.minX + 16, y: rect.minY + 12, width: 110, height: 18), size: 11, weight: .bold, color: NSColor(calibratedRed: 0.18, green: 0.42, blue: 0.16, alpha: 1))
-        drawText(file.name, in: CGRect(x: rect.minX + 16, y: rect.minY + 34, width: rect.width - 32, height: 22), size: 15, weight: .bold, color: NSColor(calibratedRed: 0.09, green: 0.22, blue: 0.1, alpha: 1))
-        drawText("抓到 3 个核心要点与 1 处账期风险", in: CGRect(x: rect.minX + 16, y: rect.minY + 62, width: rect.width - 32, height: 34), size: 12, weight: .semibold, color: NSColor(calibratedRed: 0.14, green: 0.32, blue: 0.14, alpha: 0.86))
-        drawText("双击青蛙重置", in: CGRect(x: rect.minX + 16, y: rect.minY + 100, width: rect.width - 32, height: 18), size: 10, weight: .semibold, color: NSColor(calibratedRed: 0.2, green: 0.45, blue: 0.18, alpha: 0.72))
+        drawText("理解完成", in: CGRect(x: rect.minX + 24, y: rect.minY + 18, width: 100, height: 16), size: 10, weight: .bold, color: NSColor(calibratedRed: 0.18, green: 0.42, blue: 0.16, alpha: 1))
+        drawText(file.name, in: CGRect(x: rect.minX + 24, y: rect.minY + 38, width: rect.width - 48, height: 22), size: 14, weight: .bold, color: NSColor(calibratedRed: 0.09, green: 0.22, blue: 0.1, alpha: 1))
+        drawText("3 个要点 · 1 处风险", in: CGRect(x: rect.minX + 24, y: rect.minY + 66, width: rect.width - 48, height: 22), size: 11, weight: .semibold, color: NSColor(calibratedRed: 0.14, green: 0.32, blue: 0.14, alpha: 0.82))
     }
 
     private func drawFrog() {
@@ -406,17 +427,19 @@ final class FrogPetView: NSView {
         transform.translateX(by: -center.x, yBy: -(center.y + 62))
         transform.concat()
 
-        NSColor(calibratedWhite: 0, alpha: 0.17).setFill()
-        NSBezierPath(ovalIn: CGRect(x: center.x - 72, y: center.y + 80, width: 144, height: 22)).fill()
+        NSColor(calibratedWhite: 0, alpha: 0.12).setFill()
+        NSBezierPath(ovalIn: CGRect(x: center.x - 74, y: center.y + 82, width: 148, height: 20)).fill()
 
         drawFoot(CGRect(x: center.x - 90, y: center.y + 62, width: 60, height: 34), flip: false)
         drawFoot(CGRect(x: center.x + 30, y: center.y + 62, width: 60, height: 34), flip: true)
 
         let body = NSBezierPath(roundedRect: bodyRect, xRadius: 66, yRadius: 58)
-        NSColor(calibratedRed: 0.61, green: 0.9, blue: 0.75, alpha: 1).setFill()
-        body.fill()
+        NSGradient(
+            starting: NSColor(calibratedRed: 0.73, green: 0.96, blue: 0.83, alpha: 1),
+            ending: NSColor(calibratedRed: 0.42, green: 0.74, blue: 0.57, alpha: 1)
+        )?.draw(in: body, angle: -72)
         NSColor(calibratedRed: 0.29, green: 0.58, blue: 0.45, alpha: 1).setStroke()
-        body.lineWidth = 4
+        body.lineWidth = 3
         body.stroke()
 
         drawArm(CGRect(x: center.x - 86, y: center.y + 26, width: 42, height: 58), flip: false)

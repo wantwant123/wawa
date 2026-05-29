@@ -15,9 +15,12 @@ swift build -c release
 rm -rf "$APP_DIR" "$BUILD_DIR/FileFrogNative.app.zip" "$DMG_PATH"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 
+"$ROOT_DIR/Scripts/generate_icon.py" "$BUILD_DIR/AppIcon.icns"
+
 cp ".build/release/FileFrogNative" "$MACOS_DIR/FileFrogNative"
 chmod +x "$MACOS_DIR/FileFrogNative"
 cp "Sources/FileFrogNative/Info.plist" "$CONTENTS_DIR/Info.plist"
+cp "$BUILD_DIR/AppIcon.icns" "$RESOURCES_DIR/AppIcon.icns"
 
 codesign --force --deep --sign - "$APP_DIR"
 
