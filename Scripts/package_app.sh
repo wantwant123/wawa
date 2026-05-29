@@ -9,12 +9,14 @@ MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
 DMG_PATH="$BUILD_DIR/FileFrog.dmg"
 DMG_RW_PATH="$BUILD_DIR/FileFrog-rw.dmg"
-DMG_MOUNT="$BUILD_DIR/dmg-mount"
+DMG_MOUNT="/Volumes/File Frog"
 
 cd "$ROOT_DIR"
 swift build -c release
 
-rm -rf "$APP_DIR" "$DMG_MOUNT" "$BUILD_DIR/File Frog.app.zip" "$BUILD_DIR/FileFrogNative.app" "$BUILD_DIR/FileFrogNative.app.zip" "$DMG_PATH" "$DMG_RW_PATH" "$BUILD_DIR/FileFrogNative.dmg"
+/usr/bin/hdiutil detach "$DMG_MOUNT" >/dev/null 2>&1 || true
+rmdir "$DMG_MOUNT" 2>/dev/null || true
+rm -rf "$APP_DIR" "$BUILD_DIR/File Frog.app.zip" "$BUILD_DIR/FileFrogNative.app" "$BUILD_DIR/FileFrogNative.app.zip" "$DMG_PATH" "$DMG_RW_PATH" "$BUILD_DIR/FileFrogNative.dmg"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 
 "$ROOT_DIR/Scripts/generate_icon.py" "$BUILD_DIR/AppIcon.icns"
@@ -38,12 +40,11 @@ cd "$BUILD_DIR"
   -ov \
   "$DMG_RW_PATH"
 
-mkdir -p "$DMG_MOUNT"
-/usr/bin/hdiutil attach "$DMG_RW_PATH" -nobrowse -mountpoint "$DMG_MOUNT"
+/usr/bin/hdiutil attach "$DMG_RW_PATH" -nobrowse -owners off -mountpoint "$DMG_MOUNT"
 /usr/bin/ditto "File Frog.app" "$DMG_MOUNT/File Frog.app"
 ln -s /Applications "$DMG_MOUNT/Applications"
 
-/usr/bin/osascript <<APPLESCRIPT || true
+/usr/bin/osascript <<APPLESCRIPT
 tell application "Finder"
   tell disk "File Frog"
     open
@@ -69,6 +70,7 @@ sync
 /usr/bin/hdiutil convert "$DMG_RW_PATH" \
   -format UDZO \
   -o "$DMG_PATH"
-rm -rf "$DMG_MOUNT" "$DMG_RW_PATH"
+rmdir "$DMG_MOUNT" 2>/dev/null || true
+rm -f "$DMG_RW_PATH"
 
 echo "Packaged: $DMG_PATH"
