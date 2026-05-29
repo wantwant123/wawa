@@ -9,6 +9,7 @@ final class FileFrogAppDelegate: NSObject, NSApplicationDelegate {
     private lazy var processor = DocumentProcessor(settingsStore: settingsStore)
     private lazy var workspaceController = WorkspaceWindowController(
         store: store,
+        settingsStore: settingsStore,
         focusPet: { [weak self] in
             self?.showFrog()
         }

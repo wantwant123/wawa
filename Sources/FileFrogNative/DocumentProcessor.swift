@@ -32,7 +32,15 @@ final class DocumentProcessor {
                 pageCount: extraction.pageCount,
                 warnings: extraction.warnings
             )
-            let summary = try summarizer.summarize(cleanedText)
+            let summary: SummaryResult
+            do {
+                summary = try await summarizer.summarize(cleanedText)
+            } catch {
+                if Task.isCancelled {
+                    throw CancellationError()
+                }
+                summary = RuleBasedSummarizer.summarize(cleanedText)
+            }
             let id = UUID()
             let bookmark = try? url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
             let record = DocumentRecord(
@@ -63,11 +71,12 @@ final class DocumentProcessor {
     }
 
     private func makeSummarizer() -> DocumentSummarizing {
-        switch settingsStore.load().summaryEngine {
+        let settings = settingsStore.load()
+        switch settings.summaryEngine {
         case .localRules:
             return LocalRuleSummarizer()
-        case .aiPlaceholder:
-            return AISummarizerPlaceholder()
+        case .ai:
+            return AISummarizer(settings: settings)
         }
     }
 

@@ -4,13 +4,14 @@ final class SettingsWindowController: NSWindowController {
     private let store: SettingsStore
     private let enginePopup = NSPopUpButton()
     private let endpointField = NSTextField()
+    private let modelField = NSTextField()
     private let apiKeyField = NSSecureTextField()
     private let statusLabel = NSTextField(labelWithString: "")
 
     init(store: SettingsStore) {
         self.store = store
         let window = NSWindow(
-            contentRect: NSRect(x: 360, y: 260, width: 460, height: 300),
+            contentRect: NSRect(x: 360, y: 240, width: 500, height: 350),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -53,9 +54,17 @@ final class SettingsWindowController: NSWindowController {
         endpointLabel.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(endpointLabel)
 
-        endpointField.placeholderString = "等你给接口后填这里"
+        endpointField.placeholderString = AppSettings.defaultAIEndpoint
         endpointField.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(endpointField)
+
+        let modelLabel = label("模型", size: 13, weight: .regular, color: .secondaryLabelColor)
+        modelLabel.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(modelLabel)
+
+        modelField.placeholderString = AppSettings.defaultAIModel
+        modelField.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(modelField)
 
         let apiKeyLabel = label("API Key", size: 13, weight: .regular, color: .secondaryLabelColor)
         apiKeyLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -65,7 +74,7 @@ final class SettingsWindowController: NSWindowController {
         apiKeyField.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(apiKeyField)
 
-        let note = label("当前 AI 模式只是预留接口，不会联网；真实调用等接入你的接口后启用。", size: 12, weight: .regular, color: .secondaryLabelColor)
+        let note = label("选择 DeepSeek AI 后，摘要和右侧问答会调用该接口；失败时自动回退本地规则。", size: 12, weight: .regular, color: .secondaryLabelColor)
         note.lineBreakMode = .byWordWrapping
         note.maximumNumberOfLines = 2
         note.translatesAutoresizingMaskIntoConstraints = false
@@ -99,8 +108,14 @@ final class SettingsWindowController: NSWindowController {
             endpointField.trailingAnchor.constraint(equalTo: enginePopup.trailingAnchor),
             endpointField.centerYAnchor.constraint(equalTo: endpointLabel.centerYAnchor),
 
+            modelLabel.leadingAnchor.constraint(equalTo: title.leadingAnchor),
+            modelLabel.topAnchor.constraint(equalTo: endpointLabel.bottomAnchor, constant: 26),
+            modelField.leadingAnchor.constraint(equalTo: enginePopup.leadingAnchor),
+            modelField.trailingAnchor.constraint(equalTo: enginePopup.trailingAnchor),
+            modelField.centerYAnchor.constraint(equalTo: modelLabel.centerYAnchor),
+
             apiKeyLabel.leadingAnchor.constraint(equalTo: title.leadingAnchor),
-            apiKeyLabel.topAnchor.constraint(equalTo: endpointLabel.bottomAnchor, constant: 26),
+            apiKeyLabel.topAnchor.constraint(equalTo: modelLabel.bottomAnchor, constant: 26),
             apiKeyField.leadingAnchor.constraint(equalTo: enginePopup.leadingAnchor),
             apiKeyField.trailingAnchor.constraint(equalTo: enginePopup.trailingAnchor),
             apiKeyField.centerYAnchor.constraint(equalTo: apiKeyLabel.centerYAnchor),
@@ -120,6 +135,7 @@ final class SettingsWindowController: NSWindowController {
         let settings = store.load()
         enginePopup.selectItem(at: SummaryEngine.allCases.firstIndex(of: settings.summaryEngine) ?? 0)
         endpointField.stringValue = settings.aiEndpoint
+        modelField.stringValue = settings.aiModel
         apiKeyField.stringValue = settings.aiAPIKey
         statusLabel.stringValue = ""
     }
@@ -130,8 +146,9 @@ final class SettingsWindowController: NSWindowController {
             schemaVersion: AppSettings.currentSchemaVersion,
             summaryEngine: selected,
             aiEndpoint: endpointField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines),
+            aiModel: modelField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines),
             aiAPIKey: apiKeyField.stringValue
-        )
+        ).normalized
 
         do {
             try store.save(settings)

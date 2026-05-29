@@ -2,8 +2,10 @@ import AppKit
 
 final class WorkspaceWindowController: NSWindowController {
     private let store: DocumentStore
+    private let settingsStore: SettingsStore
     private let focusPet: () -> Void
     private var currentDocument: ProcessedDocument?
+    private var answerTask: Task<Void, Never>?
     private var historyStack = NSStackView()
     private var overviewText = NSTextView()
     private var documentActionStack = NSStackView()
@@ -11,8 +13,9 @@ final class WorkspaceWindowController: NSWindowController {
     private var questionStack = NSStackView()
     private var answerText = NSTextView()
 
-    init(store: DocumentStore, focusPet: @escaping () -> Void) {
+    init(store: DocumentStore, settingsStore: SettingsStore, focusPet: @escaping () -> Void) {
         self.store = store
+        self.settingsStore = settingsStore
         self.focusPet = focusPet
         let window = NSWindow(
             contentRect: NSRect(x: 220, y: 160, width: 980, height: 640),
@@ -28,6 +31,10 @@ final class WorkspaceWindowController: NSWindowController {
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    deinit {
+        answerTask?.cancel()
     }
 
     func show(document: ProcessedDocument?) {
@@ -209,23 +216,73 @@ final class WorkspaceWindowController: NSWindowController {
 
     private func answer(_ question: String) {
         guard let document = currentDocument else { return }
-        if document.extraction.text.count < 20 {
-            answerText.string = "这份文件可读内容较少。"
+        answerTask?.cancel()
+
+        let settings = settingsStore.load()
+        if settings.summaryEngine == .ai, !settings.aiAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            answerText.string = "咕噜蛙正在问 AI..."
+            answerTask = Task { [weak self] in
+                guard let self else { return }
+                do {
+                    let response = try await self.aiAnswer(question: question, document: document, settings: settings)
+                    if Task.isCancelled { return }
+                    await MainActor.run {
+                        self.answerText.string = response
+                    }
+                } catch {
+                    if Task.isCancelled { return }
+                    await MainActor.run {
+                        self.answerText.string = self.localAnswer(question, document: document)
+                            + "\n\nAI 暂时没答上：\(error.localizedDescription)"
+                    }
+                }
+            }
             return
         }
 
+        answerText.string = localAnswer(question, document: document)
+    }
+
+    private func localAnswer(_ question: String, document: ProcessedDocument) -> String {
+        if document.extraction.text.count < 20 {
+            return "这份文件可读内容较少。"
+        }
+
         if question.contains("主要") {
-            answerText.string = document.summary.oneLineSummary
+            return document.summary.oneLineSummary
         } else if question.contains("风险") {
-            answerText.string = document.summary.risks.isEmpty
+            return document.summary.risks.isEmpty
                 ? "未发现明显风险提醒。"
                 : document.summary.risks.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: "\n")
         } else {
             let snippets = document.summary.sourceSnippets.filter { snippet in
                 snippet.contains("付款") || snippet.contains("期限") || snippet.contains("时间") || snippet.contains("账期")
             }
-            answerText.string = snippets.isEmpty ? "本地规则没有抓到明确的付款或时间条款。" : snippets.joined(separator: "\n\n")
+            return snippets.isEmpty ? "本地规则没有抓到明确的付款或时间条款。" : snippets.joined(separator: "\n\n")
         }
+    }
+
+    private func aiAnswer(question: String, document: ProcessedDocument, settings: AppSettings) async throws -> String {
+        let client = AIChatClient(settings: settings)
+        let prompt = """
+        你是 File Frog 的文档问答助手。请基于文档文本回答用户问题，不要编造；如果文档没有相关信息，请明确说没有找到。
+
+        用户问题：
+        \(question)
+
+        文档摘要：
+        \(document.summary.oneLineSummary)
+
+        核心要点：
+        \(document.summary.keyPoints.joined(separator: "\n"))
+
+        风险提醒：
+        \((document.summary.risks.isEmpty ? ["未发现明显风险提醒"] : document.summary.risks).joined(separator: "\n"))
+
+        文档文本：
+        \(AISummarizer.truncate(document.extraction.text, limit: 10000))
+        """
+        return try await client.complete(prompt: prompt)
     }
 
     private func openOriginalFile() {
