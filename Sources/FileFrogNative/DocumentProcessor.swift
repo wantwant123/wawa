@@ -3,7 +3,8 @@ import PDFKit
 
 final class DocumentProcessor {
     func process(url: URL) async throws -> ProcessedDocument {
-        try await Task.detached(priority: .userInitiated) {
+        let task = Task.detached(priority: .userInitiated) {
+            try Task.checkCancellation()
             let kind = FileKind.from(url: url)
             guard kind == .pdf || kind == .plainText || kind == .markdown else {
                 throw DocumentProcessingError.unsupported(kind)
@@ -11,7 +12,9 @@ final class DocumentProcessor {
 
             let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(UInt64.init) ?? 0
             let extraction = try Self.extract(url: url, kind: kind)
+            try Task.checkCancellation()
             let cleanedText = Self.cleanText(extraction.text)
+            try Task.checkCancellation()
 
             guard cleanedText.trimmingCharacters(in: .whitespacesAndNewlines).count >= 12 else {
                 throw DocumentProcessingError.emptyText
@@ -43,7 +46,13 @@ final class DocumentProcessor {
                 extraction: normalizedExtraction,
                 summary: summary
             )
-        }.value
+        }
+
+        return try await withTaskCancellationHandler {
+            try await task.value
+        } onCancel: {
+            task.cancel()
+        }
     }
 
     private static func extract(url: URL, kind: FileKind) throws -> ExtractionResult {
@@ -64,6 +73,7 @@ final class DocumentProcessor {
 
         var pages: [String] = []
         for index in 0..<document.pageCount {
+            try Task.checkCancellation()
             guard let page = document.page(at: index), let text = page.string else {
                 continue
             }

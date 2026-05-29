@@ -1,4 +1,5 @@
 import Foundation
+import UniformTypeIdentifiers
 
 enum FrogStage {
     case idle
@@ -8,6 +9,8 @@ enum FrogStage {
     case chewing
     case extracting
     case summarizing
+    case findingRisks
+    case finishing
     case resultReady
     case unsupported
     case failed
@@ -28,6 +31,10 @@ enum FrogStage {
             return "咬开文件"
         case .summarizing:
             return "抓重点"
+        case .findingRisks:
+            return "找风险"
+        case .finishing:
+            return "整理好了"
         case .resultReady:
             return nil
         case .unsupported:
@@ -76,7 +83,8 @@ enum FileKind: String, Codable {
     }
 
     static func from(url: URL) -> FileKind {
-        switch url.pathExtension.lowercased() {
+        let ext = url.pathExtension.lowercased()
+        switch ext {
         case "pdf":
             return .pdf
         case "txt", "text":
@@ -86,8 +94,29 @@ enum FileKind: String, Codable {
         case "doc", "docx":
             return .word
         default:
-            return .unsupported
+            break
         }
+
+        let resourceType = try? url.resourceValues(forKeys: [.contentTypeKey]).contentType
+        let filenameType = UTType(filenameExtension: ext)
+        let type = resourceType ?? filenameType
+
+        if type?.conforms(to: .pdf) == true {
+            return .pdf
+        }
+        if type?.conforms(to: .plainText) == true || type?.conforms(to: .utf8PlainText) == true {
+            return .plainText
+        }
+        if type?.identifier.contains("markdown") == true {
+            return .markdown
+        }
+        if type?.identifier.contains("word") == true ||
+            type?.identifier.contains("msword") == true ||
+            type?.identifier.contains("openxmlformats-officedocument.wordprocessingml") == true {
+            return .word
+        }
+
+        return .unsupported
     }
 }
 

@@ -23,6 +23,7 @@ final class FrogPetView: NSView {
     private var animationTimers: [Timer] = []
     private var renderTimer: Timer?
     private var processingTask: Task<Void, Never>?
+    private var processingRunID = UUID()
     private let animationStart = Date()
     private var dragWindowStart: CGPoint?
     private var dragMouseStart: CGPoint?
@@ -60,6 +61,7 @@ final class FrogPetView: NSView {
     func resetToIdle(keepResult: Bool = false) {
         processingTask?.cancel()
         processingTask = nil
+        processingRunID = UUID()
         clearTimers()
         draggedFile = nil
         ghostPoint = nil
@@ -112,11 +114,13 @@ final class FrogPetView: NSView {
     }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard canAcceptFileDrop else { return [] }
         updateDrag(sender)
         return .copy
     }
 
     override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard canAcceptFileDrop else { return [] }
         updateDrag(sender)
         return .copy
     }
@@ -128,6 +132,7 @@ final class FrogPetView: NSView {
     }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard canAcceptFileDrop else { return false }
         guard let file = readDroppedFile(sender), let url = file.url else {
             showFailure("文件读不出来", stage: .failed)
             return false
@@ -164,10 +169,27 @@ final class FrogPetView: NSView {
         CGRect(x: frogCenter.x - 224, y: frogCenter.y - 178, width: 250, height: 132)
     }
 
+    private var canAcceptFileDrop: Bool {
+        switch stage {
+        case .snapping, .chewing, .extracting, .summarizing, .findingRisks, .finishing:
+            return false
+        case .idle, .trackingFile, .readyToEat, .resultReady, .unsupported, .failed:
+            return true
+        }
+    }
+
     private func updateDrag(_ sender: NSDraggingInfo) {
         let point = convert(sender.draggingLocation, from: nil)
+        if stage == .unsupported || stage == .failed {
+            clearTimers()
+            errorMessage = nil
+        }
         ghostPoint = point
         draggedFile = readDroppedFile(sender) ?? DroppedFile(name: "外部文件", size: 0, url: nil, fileKind: .unsupported)
+        if stage == .resultReady {
+            resultDocument = nil
+            capturedFile = nil
+        }
 
         let dx = point.x - frogCenter.x
         let dy = point.y - frogCenter.y
@@ -206,18 +228,20 @@ final class FrogPetView: NSView {
     private func runProcessingSequence(url: URL) {
         processingTask?.cancel()
         clearTimers()
+        let runID = UUID()
+        processingRunID = runID
         resultDocument = nil
         errorMessage = nil
         stage = .snapping
         progress = nil
 
-        schedule(after: 0.32) { [weak self] in
+        schedule(after: 0.24, runID: runID) { [weak self] in
             self?.stage = .chewing
         }
-        schedule(after: 0.75) { [weak self] in
+        schedule(after: 0.64, runID: runID) { [weak self] in
             self?.draggedFile = nil
             self?.ghostPoint = nil
-            self?.progress = 18
+            self?.startProgressTicker(from: 18, cap: 62)
             self?.stage = .extracting
         }
 
@@ -228,20 +252,15 @@ final class FrogPetView: NSView {
                 if Task.isCancelled { return }
                 try store.save(document)
                 await MainActor.run {
+                    guard self.processingRunID == runID else { return }
                     self.onLibraryChanged?()
-                    self.progress = 72
-                    self.stage = .summarizing
-                    self.schedule(after: 0.75) { [weak self] in
-                        self?.progress = nil
-                        self?.resultDocument = document
-                        self?.stage = .resultReady
-                        self?.eyeOffset = .zero
-                    }
+                    self.finishProcessing(document, runID: runID)
                 }
             } catch {
                 if Task.isCancelled { return }
                 let message = (error as? LocalizedError)?.errorDescription ?? "读文件时出错了"
                 await MainActor.run {
+                    guard self.processingRunID == runID else { return }
                     self.showFailure(message, stage: .failed)
                 }
             }
@@ -275,11 +294,47 @@ final class FrogPetView: NSView {
         animationTimers.removeAll()
     }
 
-    private func schedule(after delay: TimeInterval, _ action: @escaping () -> Void) {
-        let timer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { _ in
+    private func schedule(after delay: TimeInterval, runID: UUID? = nil, _ action: @escaping () -> Void) {
+        let timer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
+            guard let self else { return }
+            if let runID, runID != self.processingRunID {
+                return
+            }
             action()
         }
         animationTimers.append(timer)
+    }
+
+    private func startProgressTicker(from start: Int, cap: Int) {
+        progress = start
+        let timer = Timer.scheduledTimer(withTimeInterval: 0.22, repeats: true) { [weak self] _ in
+            guard let self, let progress = self.progress else { return }
+            guard progress < cap else { return }
+            let step = progress < 36 ? 5 : 3
+            self.progress = min(cap, progress + step)
+        }
+        animationTimers.append(timer)
+    }
+
+    private func finishProcessing(_ document: ProcessedDocument, runID: UUID) {
+        clearTimers()
+        progress = 68
+        stage = .summarizing
+
+        schedule(after: 0.42, runID: runID) { [weak self] in
+            self?.progress = 84
+            self?.stage = .findingRisks
+        }
+        schedule(after: 0.86, runID: runID) { [weak self] in
+            self?.progress = 96
+            self?.stage = .finishing
+        }
+        schedule(after: 1.24, runID: runID) { [weak self] in
+            self?.progress = nil
+            self?.resultDocument = document
+            self?.stage = .resultReady
+            self?.eyeOffset = .zero
+        }
     }
 
     private func startRenderLoop() {
@@ -307,10 +362,10 @@ final class FrogPetView: NSView {
     }
 
     private func drawDropAura() {
-        guard draggedFile != nil || stage == .trackingFile || stage == .readyToEat || stage == .extracting || stage == .summarizing else {
+        guard draggedFile != nil || stage == .trackingFile || stage == .readyToEat || stage == .extracting || stage == .summarizing || stage == .findingRisks || stage == .finishing else {
             return
         }
-        let ready = stage == .readyToEat || stage == .extracting || stage == .summarizing
+        let ready = stage == .readyToEat || stage == .extracting || stage == .summarizing || stage == .findingRisks || stage == .finishing
         let pulse = CGFloat((sin(Date().timeIntervalSince(animationStart) * 5.0) + 1.0) * 0.5)
         let size = ready ? CGSize(width: 222 + pulse * 14, height: 162 + pulse * 10) : CGSize(width: 198 + pulse * 10, height: 144 + pulse * 8)
         let aura = NSBezierPath(ovalIn: centeredRect(size: size))
@@ -425,7 +480,7 @@ final class FrogPetView: NSView {
         switch stage {
         case .readyToEat:
             scale = 1.035
-        case .chewing, .extracting, .summarizing:
+        case .chewing, .extracting, .summarizing, .findingRisks, .finishing:
             scale = 1.02 + abs(breath) * 0.018
         case .unsupported, .failed:
             scale = 0.985
@@ -515,7 +570,7 @@ final class FrogPetView: NSView {
         NSColor(calibratedRed: 0.94, green: 1, blue: 0.92, alpha: 1).setFill()
         NSBezierPath(ovalIn: CGRect(x: center.x - 18, y: center.y - 18, width: 36, height: 36)).fill()
 
-        let thinkingOffset: CGPoint = stage == .summarizing ? CGPoint(x: 0, y: -5) : eyeOffset
+        let thinkingOffset: CGPoint = stage == .summarizing || stage == .findingRisks ? CGPoint(x: 0, y: -5) : eyeOffset
         NSColor(calibratedRed: 0.09, green: 0.14, blue: 0.17, alpha: 1).setFill()
         NSBezierPath(ovalIn: CGRect(x: center.x - 10 + thinkingOffset.x, y: center.y - 10 + thinkingOffset.y, width: 20, height: 20)).fill()
         NSColor.white.setFill()
