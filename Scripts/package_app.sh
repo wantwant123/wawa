@@ -8,11 +8,12 @@ CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
 DMG_PATH="$BUILD_DIR/FileFrog.dmg"
+DMG_ROOT="$BUILD_DIR/dmg-root"
 
 cd "$ROOT_DIR"
 swift build -c release
 
-rm -rf "$APP_DIR" "$BUILD_DIR/File Frog.app.zip" "$BUILD_DIR/FileFrogNative.app" "$BUILD_DIR/FileFrogNative.app.zip" "$DMG_PATH" "$BUILD_DIR/FileFrogNative.dmg"
+rm -rf "$APP_DIR" "$DMG_ROOT" "$BUILD_DIR/File Frog.app.zip" "$BUILD_DIR/FileFrogNative.app" "$BUILD_DIR/FileFrogNative.app.zip" "$DMG_PATH" "$BUILD_DIR/FileFrogNative.dmg"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 
 "$ROOT_DIR/Scripts/generate_icon.py" "$BUILD_DIR/AppIcon.icns"
@@ -28,9 +29,12 @@ codesign --force --deep --sign - "$APP_DIR"
 
 cd "$BUILD_DIR"
 /usr/bin/ditto -c -k --keepParent "File Frog.app" "File Frog.app.zip"
+mkdir -p "$DMG_ROOT"
+/usr/bin/ditto "File Frog.app" "$DMG_ROOT/File Frog.app"
+ln -s /Applications "$DMG_ROOT/Applications"
 /usr/bin/hdiutil create \
   -volname "File Frog" \
-  -srcfolder "File Frog.app" \
+  -srcfolder "$DMG_ROOT" \
   -ov \
   -format UDZO \
   "$DMG_PATH"
