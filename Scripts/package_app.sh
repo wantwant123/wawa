@@ -10,7 +10,6 @@ RESOURCES_DIR="$CONTENTS_DIR/Resources"
 DMG_PATH="$BUILD_DIR/FileFrog.dmg"
 DMG_RW_PATH="$BUILD_DIR/FileFrog-rw.dmg"
 DMG_MOUNT="$BUILD_DIR/dmg-mount"
-DMG_BACKGROUND="$BUILD_DIR/dmg-background.png"
 
 cd "$ROOT_DIR"
 swift build -c release
@@ -32,7 +31,6 @@ codesign --force --deep --sign - "$APP_DIR"
 cd "$BUILD_DIR"
 /usr/bin/ditto -c -k --keepParent "File Frog.app" "File Frog.app.zip"
 
-"$ROOT_DIR/Scripts/generate_dmg_background.py" "$DMG_BACKGROUND"
 /usr/bin/hdiutil create \
   -volname "File Frog" \
   -size 80m \
@@ -45,25 +43,21 @@ mkdir -p "$DMG_MOUNT"
 /usr/bin/hdiutil attach "$DMG_RW_PATH" -nobrowse -mountpoint "$DMG_MOUNT"
 /usr/bin/ditto "File Frog.app" "$DMG_MOUNT/File Frog.app"
 ln -s /Applications "$DMG_MOUNT/Applications"
-mkdir -p "$DMG_MOUNT/.background"
-cp "$DMG_BACKGROUND" "$DMG_MOUNT/.background/background.png"
-chflags hidden "$DMG_MOUNT/.background" || true
 
 /usr/bin/osascript <<APPLESCRIPT || true
-set backgroundFile to POSIX file "$DMG_MOUNT/.background/background.png" as alias
 tell application "Finder"
   tell disk "File Frog"
     open
     set current view of container window to icon view
     set toolbar visible of container window to false
     set statusbar visible of container window to false
-    set bounds of container window to {160, 120, 920, 540}
+    set bounds of container window to {180, 140, 720, 520}
     set viewOptions to icon view options of container window
     set arrangement of viewOptions to not arranged
     set icon size of viewOptions to 96
-    set background picture of viewOptions to backgroundFile
-    set position of item "File Frog.app" of container window to {210, 210}
-    set position of item "Applications" of container window to {555, 210}
+    set background color of viewOptions to {65535, 65535, 65535}
+    set position of item "File Frog.app" of container window to {170, 185}
+    set position of item "Applications" of container window to {395, 185}
     update without registering applications
     delay 1
     close
