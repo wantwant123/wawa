@@ -2,7 +2,14 @@ import Foundation
 import PDFKit
 
 final class DocumentProcessor {
+    private let settingsStore: SettingsStore
+
+    init(settingsStore: SettingsStore = SettingsStore()) {
+        self.settingsStore = settingsStore
+    }
+
     func process(url: URL) async throws -> ProcessedDocument {
+        let summarizer = makeSummarizer()
         let task = Task.detached(priority: .userInitiated) {
             try Task.checkCancellation()
             let kind = FileKind.from(url: url)
@@ -25,7 +32,7 @@ final class DocumentProcessor {
                 pageCount: extraction.pageCount,
                 warnings: extraction.warnings
             )
-            let summary = RuleBasedSummarizer.summarize(cleanedText)
+            let summary = try summarizer.summarize(cleanedText)
             let id = UUID()
             let bookmark = try? url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
             let record = DocumentRecord(
@@ -52,6 +59,15 @@ final class DocumentProcessor {
             try await task.value
         } onCancel: {
             task.cancel()
+        }
+    }
+
+    private func makeSummarizer() -> DocumentSummarizing {
+        switch settingsStore.load().summaryEngine {
+        case .localRules:
+            return LocalRuleSummarizer()
+        case .aiPlaceholder:
+            return AISummarizerPlaceholder()
         }
     }
 

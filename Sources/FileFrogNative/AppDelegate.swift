@@ -5,13 +5,15 @@ final class FileFrogAppDelegate: NSObject, NSApplicationDelegate {
     private weak var frogView: FrogPetView?
     private var statusItem: NSStatusItem?
     private let store = DocumentStore()
-    private let processor = DocumentProcessor()
+    private let settingsStore = SettingsStore()
+    private lazy var processor = DocumentProcessor(settingsStore: settingsStore)
     private lazy var workspaceController = WorkspaceWindowController(
         store: store,
         focusPet: { [weak self] in
             self?.showFrog()
         }
     )
+    private lazy var settingsController = SettingsWindowController(store: settingsStore)
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -64,6 +66,7 @@ final class FileFrogAppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem(title: "重置咕噜蛙", action: #selector(resetFrog), keyEquivalent: ""))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "打开理解窗口", action: #selector(openWorkspaceFromMenu), keyEquivalent: "o"))
+        menu.addItem(NSMenuItem(title: "设置...", action: #selector(openSettings), keyEquivalent: ","))
         menu.addItem(NSMenuItem(title: "显示/隐藏窗口边界", action: #selector(toggleDebugFrame), keyEquivalent: "d"))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "退出 File Frog", action: #selector(quitApp), keyEquivalent: "q"))
@@ -96,6 +99,10 @@ final class FileFrogAppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func openWorkspaceFromMenu() {
         workspaceController.show(document: store.loadRecentDocuments(limit: 1).first)
+    }
+
+    @objc private func openSettings() {
+        settingsController.show()
     }
 
     @objc private func toggleDebugFrame() {

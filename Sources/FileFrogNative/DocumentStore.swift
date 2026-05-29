@@ -1,6 +1,12 @@
 import Foundation
 
 final class DocumentStore {
+    private struct LibraryFile: Codable {
+        let schemaVersion: Int
+        let records: [DocumentRecord]
+    }
+
+    private let schemaVersion = 1
     private let rootURL: URL
     private let documentsURL: URL
     private let libraryURL: URL
@@ -33,12 +39,20 @@ final class DocumentStore {
         records.removeAll { $0.id == document.record.id }
         records.insert(document.record, at: 0)
         records = Array(records.prefix(50))
-        try encoder.encode(records).write(to: libraryURL, options: .atomic)
+        try writeRecords(records)
     }
 
     func loadRecords(limit: Int? = nil) -> [DocumentRecord] {
-        guard let data = try? Data(contentsOf: libraryURL),
-              let records = try? decoder.decode([DocumentRecord].self, from: data) else {
+        guard let data = try? Data(contentsOf: libraryURL) else {
+            return []
+        }
+
+        let records: [DocumentRecord]
+        if let library = try? decoder.decode(LibraryFile.self, from: data) {
+            records = library.records
+        } else if let legacyRecords = try? decoder.decode([DocumentRecord].self, from: data) {
+            records = legacyRecords
+        } else {
             return []
         }
 
@@ -82,7 +96,33 @@ final class DocumentStore {
         loadRecords(limit: limit).compactMap { loadDocument(id: $0.id) }
     }
 
+    func deleteDocument(id: UUID) throws {
+        var records = loadRecords()
+        records.removeAll { $0.id == id }
+        try ensureDirectories()
+        try writeRecords(records)
+
+        let documentURL = documentsURL.appendingPathComponent(id.uuidString, isDirectory: true)
+        if FileManager.default.fileExists(atPath: documentURL.path) {
+            try FileManager.default.removeItem(at: documentURL)
+        }
+    }
+
+    func clearLibrary() throws {
+        try ensureDirectories()
+        try writeRecords([])
+        if FileManager.default.fileExists(atPath: documentsURL.path) {
+            try FileManager.default.removeItem(at: documentsURL)
+        }
+        try FileManager.default.createDirectory(at: documentsURL, withIntermediateDirectories: true)
+    }
+
     private func ensureDirectories() throws {
         try FileManager.default.createDirectory(at: documentsURL, withIntermediateDirectories: true)
+    }
+
+    private func writeRecords(_ records: [DocumentRecord]) throws {
+        let library = LibraryFile(schemaVersion: schemaVersion, records: records)
+        try encoder.encode(library).write(to: libraryURL, options: .atomic)
     }
 }
