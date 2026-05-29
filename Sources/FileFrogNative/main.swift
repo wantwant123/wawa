@@ -72,6 +72,8 @@ struct DroppedFile {
 
 final class FileFrogAppDelegate: NSObject, NSApplicationDelegate {
     private var window: NSPanel?
+    private weak var frogView: FrogPetView?
+    private var statusItem: NSStatusItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -98,6 +100,56 @@ final class FileFrogAppDelegate: NSObject, NSApplicationDelegate {
         panel.setFrameAutosaveName("FileFrogPetWindow")
 
         self.window = panel
+        self.frogView = view
+        setupStatusMenu()
+    }
+
+    private func setupStatusMenu() {
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        item.button?.title = "🐸"
+        item.button?.toolTip = "File Frog"
+
+        let menu = NSMenu()
+        menu.addItem(NSMenuItem(title: "显示咕噜蛙", action: #selector(showFrog), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "隐藏咕噜蛙", action: #selector(hideFrog), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "重置位置", action: #selector(resetPosition), keyEquivalent: ""))
+        menu.addItem(.separator())
+        menu.addItem(NSMenuItem(title: "显示/隐藏调试区域", action: #selector(toggleDebugFrame), keyEquivalent: "d"))
+        menu.addItem(.separator())
+        menu.addItem(NSMenuItem(title: "退出 File Frog", action: #selector(quitApp), keyEquivalent: "q"))
+        menu.items.forEach { $0.target = self }
+
+        item.menu = menu
+        statusItem = item
+    }
+
+    @objc private func showFrog() {
+        window?.orderFrontRegardless()
+    }
+
+    @objc private func hideFrog() {
+        window?.orderOut(nil)
+    }
+
+    @objc private func resetPosition() {
+        guard let screen = NSScreen.main else { return }
+        let visible = screen.visibleFrame
+        let size = CGSize(width: 520, height: 520)
+        let origin = CGPoint(
+            x: visible.maxX - size.width - 60,
+            y: visible.minY + 80
+        )
+        window?.setFrame(NSRect(origin: origin, size: size), display: true)
+        window?.orderFrontRegardless()
+    }
+
+    @objc private func toggleDebugFrame() {
+        frogView?.toggleDebugFrame()
+        window?.orderFrontRegardless()
+    }
+
+    @objc private func quitApp() {
+        NSApp.terminate(nil)
     }
 }
 
@@ -117,7 +169,7 @@ final class FrogPetView: NSView {
     private var animationTimers: [Timer] = []
     private var dragWindowStart: CGPoint?
     private var dragMouseStart: CGPoint?
-    private let showsDebugFrame = ProcessInfo.processInfo.environment["FILE_FROG_DEBUG"] == "1"
+    private var showsDebugFrame = ProcessInfo.processInfo.environment["FILE_FROG_DEBUG"] == "1"
 
     override var isFlipped: Bool {
         true
@@ -132,6 +184,11 @@ final class FrogPetView: NSView {
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    func toggleDebugFrame() {
+        showsDebugFrame.toggle()
+        needsDisplay = true
     }
 
     override func draw(_ dirtyRect: NSRect) {
