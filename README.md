@@ -10,7 +10,7 @@
 - 支持从 Finder/桌面拖文件到青蛙
 - 原生绘制青蛙、文件 ghost、吞文件动画、消化进度、结果卡
 - 菜单栏提供显示、隐藏、重置位置和退出入口
-- GitHub Actions 在线打包 `.dmg`
+- GitHub Actions 在线打包带背景和拖拽安装布局的 `.dmg`
 
 ## 本地运行
 
@@ -25,7 +25,7 @@ swift run FileFrogNative
 ```
 
 产物在 `build/File Frog.app.zip`。
-同时会生成 `build/FileFrog.dmg`，打开后把 `File Frog.app` 拖到 `Applications` 安装。
+同时会生成 `build/FileFrog.dmg`，打开后按窗口里的箭头把 `File Frog.app` 拖到 `Applications` 安装。
 
 ## 线上打包
 
