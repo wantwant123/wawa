@@ -10,6 +10,9 @@ final class FrogPetView: NSView {
     private let store: DocumentStore
     private var stage: FrogStage = .idle {
         didSet {
+            if oldValue != stage {
+                stageStartedAt = Date()
+            }
             needsDisplay = true
         }
     }
@@ -25,6 +28,7 @@ final class FrogPetView: NSView {
     private var processingTask: Task<Void, Never>?
     private var processingRunID = UUID()
     private let animationStart = Date()
+    private var stageStartedAt = Date()
     private var dragWindowStart: CGPoint?
     private var dragMouseStart: CGPoint?
     private var showsDebugFrame = ProcessInfo.processInfo.environment["FILE_FROG_DEBUG"] == "1"
@@ -167,6 +171,10 @@ final class FrogPetView: NSView {
 
     private var resultCardRect: CGRect {
         CGRect(x: frogCenter.x - 224, y: frogCenter.y - 178, width: 250, height: 132)
+    }
+
+    private var stageElapsed: TimeInterval {
+        Date().timeIntervalSince(stageStartedAt)
     }
 
     private var canAcceptFileDrop: Bool {
@@ -398,9 +406,24 @@ final class FrogPetView: NSView {
     private func drawFileGhost() {
         guard let point = ghostPoint, let file = draggedFile else { return }
         NSGraphicsContext.saveGraphicsState()
+        let snapScale = stage == .snapping ? max(0.18, 1.0 - CGFloat(stageElapsed / 0.28) * 0.72) : 1
+        let pull = stage == .snapping ? CGFloat(min(1, stageElapsed / 0.22)) : 0
+        let displayPoint = CGPoint(
+            x: point.x + (frogCenter.x - point.x) * pull * 0.58,
+            y: point.y + (frogCenter.y + 20 - point.y) * pull * 0.58
+        )
+        let alpha = stage == .snapping ? max(0.08, 1 - CGFloat(stageElapsed / 0.35)) : 1
+        NSGraphicsContext.current?.cgContext.setAlpha(alpha)
+
+        let transform = NSAffineTransform()
+        transform.translateX(by: displayPoint.x, yBy: displayPoint.y)
+        transform.scale(by: snapScale)
+        transform.translateX(by: -displayPoint.x, yBy: -displayPoint.y)
+        transform.concat()
+
         applyShadow(color: NSColor.black.withAlphaComponent(0.22), offset: CGSize(width: 0, height: -8), blur: 16)
 
-        let paper = CGRect(x: point.x - 34, y: point.y - 48, width: 68, height: 78)
+        let paper = CGRect(x: displayPoint.x - 34, y: displayPoint.y - 48, width: 68, height: 78)
         let badgeColor: NSColor
         switch file.fileKind {
         case .pdf:
@@ -422,7 +445,7 @@ final class FrogPetView: NSView {
 
         NSColor.white.setFill()
         drawText(file.badge, in: paper.offsetBy(dx: 0, dy: 22), size: 15, weight: .bold, alignment: .center)
-        drawText(file.name, in: CGRect(x: point.x - 62, y: point.y + 34, width: 124, height: 18), size: 11, weight: .semibold, alignment: .center, color: .white)
+        drawText(file.name, in: CGRect(x: displayPoint.x - 62, y: displayPoint.y + 34, width: 124, height: 18), size: 11, weight: .semibold, alignment: .center, color: .white)
         NSGraphicsContext.restoreGraphicsState()
     }
 
@@ -447,8 +470,18 @@ final class FrogPetView: NSView {
 
     private func drawResultCard() {
         guard stage == .resultReady, let document = resultDocument else { return }
-        let rect = resultCardRect
+        var rect = resultCardRect
+        let appear = easeOutBack(min(1, CGFloat(stageElapsed / 0.52)))
+        rect.origin.y += (1 - appear) * 30
+
         NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current?.cgContext.setAlpha(max(0, min(1, appear)))
+        let transform = NSAffineTransform()
+        transform.translateX(by: rect.midX, yBy: rect.midY)
+        transform.scale(by: 0.84 + appear * 0.16)
+        transform.translateX(by: -rect.midX, yBy: -rect.midY)
+        transform.concat()
+
         applyShadow(color: NSColor.black.withAlphaComponent(0.18), offset: CGSize(width: 0, height: -8), blur: 18)
         let card = NSBezierPath()
         card.move(to: CGPoint(x: rect.minX + 20, y: rect.midY))
@@ -463,34 +496,61 @@ final class FrogPetView: NSView {
             starting: NSColor(calibratedRed: 0.90, green: 1.0, blue: 0.64, alpha: 0.98),
             ending: NSColor(calibratedRed: 0.68, green: 0.91, blue: 0.39, alpha: 0.96)
         )?.draw(in: card, angle: -18)
-        NSGraphicsContext.restoreGraphicsState()
 
         drawText("理解完成 · \(document.record.fileKind.displayName) · \(document.record.sizeLabel)", in: CGRect(x: rect.minX + 26, y: rect.minY + 18, width: rect.width - 52, height: 16), size: 10, weight: .bold, color: NSColor(calibratedRed: 0.18, green: 0.42, blue: 0.16, alpha: 1))
         drawText(document.record.fileName, in: CGRect(x: rect.minX + 26, y: rect.minY + 38, width: rect.width - 52, height: 20), size: 14, weight: .bold, color: NSColor(calibratedRed: 0.09, green: 0.22, blue: 0.1, alpha: 1))
         drawText(document.summary.oneLineSummary, in: CGRect(x: rect.minX + 26, y: rect.minY + 62, width: rect.width - 52, height: 34), size: 10, weight: .regular, color: NSColor(calibratedRed: 0.12, green: 0.25, blue: 0.12, alpha: 0.88))
         let riskText = document.summary.risks.isEmpty ? "未发现明显风险" : "\(document.summary.risks.count) 处风险"
         drawText("打开理解窗口 · \(document.summary.keyPoints.count) 个要点 · \(riskText)", in: CGRect(x: rect.minX + 26, y: rect.minY + 103, width: rect.width - 52, height: 18), size: 10, weight: .semibold, color: NSColor(calibratedRed: 0.14, green: 0.32, blue: 0.14, alpha: 0.82))
+        NSGraphicsContext.restoreGraphicsState()
     }
 
     private func drawFrog() {
         let center = frogCenter
         let phase = Date().timeIntervalSince(animationStart)
         let breath = CGFloat(sin(phase * 2.2))
+        let chew = CGFloat(sin(phase * 13.0))
+        let think = CGFloat(sin(phase * 4.4))
+        let shake = (stage == .failed || stage == .unsupported) ? CGFloat(sin(stageElapsed * 28.0) * max(0, 1 - stageElapsed / 0.8)) : 0
+        let hop = stage == .finishing ? -abs(CGFloat(sin(stageElapsed * 10.0))) * max(0, 1 - CGFloat(stageElapsed / 0.9)) * 8 : 0
         let scale: CGFloat
         switch stage {
         case .readyToEat:
             scale = 1.035
-        case .chewing, .extracting, .summarizing, .findingRisks, .finishing:
+        case .chewing:
+            scale = 1.02 + abs(chew) * 0.028
+        case .extracting:
             scale = 1.02 + abs(breath) * 0.018
+        case .summarizing, .findingRisks:
+            scale = 1.015 + abs(think) * 0.012
+        case .finishing:
+            scale = 1.04 + abs(breath) * 0.012
         case .unsupported, .failed:
             scale = 0.985
         default:
             scale = 1.0 + breath * 0.012
         }
-        let squash: CGFloat = stage == .readyToEat ? 0.965 : 1.0
+        let squash: CGFloat
+        switch stage {
+        case .readyToEat:
+            squash = 0.955
+        case .chewing:
+            squash = 0.985 + abs(chew) * 0.026
+        case .snapping:
+            squash = 0.94
+        default:
+            squash = 1.0
+        }
 
         NSGraphicsContext.saveGraphicsState()
         let transform = NSAffineTransform()
+        transform.translateX(by: shake * 5, yBy: hop)
+        if stage == .trackingFile || stage == .readyToEat {
+            transform.translateX(by: eyeOffset.x * 1.2, yBy: eyeOffset.y * 0.8)
+        }
+        if stage == .summarizing || stage == .findingRisks {
+            transform.rotate(byDegrees: think * 1.4)
+        }
         transform.translateX(by: center.x, yBy: center.y + 92)
         transform.scaleX(by: scale, yBy: scale * squash)
         transform.translateX(by: -center.x, yBy: -(center.y + 92))
@@ -511,6 +571,7 @@ final class FrogPetView: NSView {
         drawEye(center: CGPoint(x: center.x - 39, y: center.y - 33))
         drawEye(center: CGPoint(x: center.x + 39, y: center.y - 33))
         drawBridgeAndFace(center: center)
+        drawMouth(center: center)
 
         if stage == .snapping {
             drawTongue()
@@ -549,14 +610,39 @@ final class FrogPetView: NSView {
         NSColor(calibratedRed: 0.96, green: 0.78, blue: 0.40, alpha: 0.72).setFill()
         NSBezierPath(ovalIn: CGRect(x: center.x - 72, y: center.y + 33, width: 30, height: 28)).fill()
         NSBezierPath(ovalIn: CGRect(x: center.x + 42, y: center.y + 33, width: 30, height: 28)).fill()
+    }
 
+    private func drawMouth(center: CGPoint) {
         NSColor(calibratedRed: 0.28, green: 0.55, blue: 0.42, alpha: 1).setStroke()
-        let smile = NSBezierPath()
-        smile.move(to: CGPoint(x: center.x - 35, y: center.y + 42))
-        smile.curve(to: CGPoint(x: center.x + 35, y: center.y + 42), controlPoint1: CGPoint(x: center.x - 14, y: center.y + 58), controlPoint2: CGPoint(x: center.x + 14, y: center.y + 58))
-        smile.lineWidth = 4
-        smile.lineCapStyle = .round
-        smile.stroke()
+        switch stage {
+        case .readyToEat, .snapping:
+            NSColor(calibratedRed: 0.36, green: 0.38, blue: 0.30, alpha: 0.85).setFill()
+            NSBezierPath(ovalIn: CGRect(x: center.x - 25, y: center.y + 32, width: 50, height: 23)).fill()
+            NSColor(calibratedRed: 0.96, green: 0.43, blue: 0.55, alpha: 0.55).setFill()
+            NSBezierPath(ovalIn: CGRect(x: center.x - 15, y: center.y + 42, width: 30, height: 10)).fill()
+        case .chewing:
+            let chew = CGFloat(sin(Date().timeIntervalSince(animationStart) * 13.0))
+            let mouth = NSBezierPath()
+            mouth.move(to: CGPoint(x: center.x - 26, y: center.y + 44 + chew * 2))
+            mouth.curve(to: CGPoint(x: center.x + 26, y: center.y + 44 - chew * 2), controlPoint1: CGPoint(x: center.x - 10, y: center.y + 54), controlPoint2: CGPoint(x: center.x + 10, y: center.y + 34))
+            mouth.lineWidth = 4
+            mouth.lineCapStyle = .round
+            mouth.stroke()
+        case .unsupported, .failed:
+            let frown = NSBezierPath()
+            frown.move(to: CGPoint(x: center.x - 28, y: center.y + 54))
+            frown.curve(to: CGPoint(x: center.x + 28, y: center.y + 54), controlPoint1: CGPoint(x: center.x - 10, y: center.y + 40), controlPoint2: CGPoint(x: center.x + 10, y: center.y + 40))
+            frown.lineWidth = 4
+            frown.lineCapStyle = .round
+            frown.stroke()
+        default:
+            let smile = NSBezierPath()
+            smile.move(to: CGPoint(x: center.x - 35, y: center.y + 42))
+            smile.curve(to: CGPoint(x: center.x + 35, y: center.y + 42), controlPoint1: CGPoint(x: center.x - 14, y: center.y + 58), controlPoint2: CGPoint(x: center.x + 14, y: center.y + 58))
+            smile.lineWidth = 4
+            smile.lineCapStyle = .round
+            smile.stroke()
+        }
     }
 
     private func drawEye(center: CGPoint) {
@@ -567,15 +653,25 @@ final class FrogPetView: NSView {
         outer.lineWidth = 5
         outer.stroke()
 
+        let blink = blinkScale()
+        let innerRect = CGRect(x: center.x - 18, y: center.y - 18 + (1 - blink) * 16, width: 36, height: max(3, 36 * blink))
         NSColor(calibratedRed: 0.94, green: 1, blue: 0.92, alpha: 1).setFill()
-        NSBezierPath(ovalIn: CGRect(x: center.x - 18, y: center.y - 18, width: 36, height: 36)).fill()
+        NSBezierPath(ovalIn: innerRect).fill()
+        guard blink > 0.18 else { return }
 
-        let thinkingOffset: CGPoint = stage == .summarizing || stage == .findingRisks ? CGPoint(x: 0, y: -5) : eyeOffset
+        let thinkingOffset: CGPoint
+        if stage == .summarizing || stage == .findingRisks {
+            thinkingOffset = CGPoint(x: CGFloat(sin(Date().timeIntervalSince(animationStart) * 2.3)) * 2, y: -5)
+        } else if stage == .unsupported || stage == .failed {
+            thinkingOffset = CGPoint(x: -2, y: 2)
+        } else {
+            thinkingOffset = eyeOffset
+        }
         NSColor(calibratedRed: 0.09, green: 0.14, blue: 0.17, alpha: 1).setFill()
-        NSBezierPath(ovalIn: CGRect(x: center.x - 10 + thinkingOffset.x, y: center.y - 10 + thinkingOffset.y, width: 20, height: 20)).fill()
+        NSBezierPath(ovalIn: CGRect(x: center.x - 10 + thinkingOffset.x, y: center.y - 10 + thinkingOffset.y + (1 - blink) * 10, width: 20, height: max(3, 20 * blink))).fill()
         NSColor.white.setFill()
-        NSBezierPath(ovalIn: CGRect(x: center.x - 8 + thinkingOffset.x, y: center.y - 11 + thinkingOffset.y, width: 8, height: 8)).fill()
-        NSBezierPath(ovalIn: CGRect(x: center.x + 3 + thinkingOffset.x, y: center.y + 4 + thinkingOffset.y, width: 4, height: 4)).fill()
+        NSBezierPath(ovalIn: CGRect(x: center.x - 8 + thinkingOffset.x, y: center.y - 11 + thinkingOffset.y, width: 8, height: max(2, 8 * blink))).fill()
+        NSBezierPath(ovalIn: CGRect(x: center.x + 3 + thinkingOffset.x, y: center.y + 4 + thinkingOffset.y, width: 4, height: max(1, 4 * blink))).fill()
     }
 
     private func drawFoot(_ rect: CGRect, flip: Bool) {
@@ -604,15 +700,50 @@ final class FrogPetView: NSView {
 
     private func drawTongue() {
         let target = ghostPoint ?? CGPoint(x: frogCenter.x - 176, y: frogCenter.y - 86)
+        let reach = easeOutCubic(min(1, CGFloat(stageElapsed / 0.18)))
+        let retract = max(0, CGFloat((stageElapsed - 0.18) / 0.18))
+        let visible = max(0, 1 - retract * 0.7)
+        let tongueTarget = CGPoint(
+            x: frogCenter.x + (target.x - frogCenter.x) * reach,
+            y: frogCenter.y + 37 + (target.y - (frogCenter.y + 37)) * reach
+        )
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current?.cgContext.setAlpha(visible)
         NSColor(calibratedRed: 0.96, green: 0.43, blue: 0.55, alpha: 1).setStroke()
         let tongue = NSBezierPath()
         tongue.move(to: CGPoint(x: frogCenter.x - 4, y: frogCenter.y + 37))
-        tongue.curve(to: target, controlPoint1: CGPoint(x: frogCenter.x - 44, y: frogCenter.y + 26), controlPoint2: CGPoint(x: (frogCenter.x + target.x) / 2, y: target.y + 18))
-        tongue.lineWidth = 15
+        tongue.curve(to: tongueTarget, controlPoint1: CGPoint(x: frogCenter.x - 44, y: frogCenter.y + 26), controlPoint2: CGPoint(x: (frogCenter.x + tongueTarget.x) / 2, y: tongueTarget.y + 18))
+        tongue.lineWidth = 12 + reach * 4
         tongue.lineCapStyle = .round
         tongue.stroke()
         NSColor(calibratedRed: 1.0, green: 0.62, blue: 0.68, alpha: 1).setFill()
-        NSBezierPath(ovalIn: CGRect(x: target.x - 8, y: target.y - 6, width: 16, height: 12)).fill()
+        NSBezierPath(ovalIn: CGRect(x: tongueTarget.x - 8, y: tongueTarget.y - 6, width: 16, height: 12)).fill()
+        NSGraphicsContext.restoreGraphicsState()
+    }
+
+    private func blinkScale() -> CGFloat {
+        if stage == .snapping || stage == .chewing {
+            return 1
+        }
+
+        let cycle = Date().timeIntervalSince(animationStart).truncatingRemainder(dividingBy: 4.8)
+        let blinkWindow = 0.18
+        if cycle < blinkWindow {
+            return max(0.08, abs(CGFloat(cycle / blinkWindow) - 0.5) * 2)
+        }
+        return 1
+    }
+
+    private func easeOutCubic(_ value: CGFloat) -> CGFloat {
+        let clamped = max(0, min(1, value))
+        return 1 - pow(1 - clamped, 3)
+    }
+
+    private func easeOutBack(_ value: CGFloat) -> CGFloat {
+        let clamped = max(0, min(1, value))
+        let c1: CGFloat = 1.70158
+        let c3 = c1 + 1
+        return 1 + c3 * pow(clamped - 1, 3) + c1 * pow(clamped - 1, 2)
     }
 
     private func applyShadow(color: NSColor, offset: CGSize, blur: CGFloat) {
