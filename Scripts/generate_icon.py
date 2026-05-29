@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 import math
 import os
+import shutil
 import struct
+import subprocess
 import sys
 import zlib
 
@@ -78,8 +80,8 @@ def save_png(path, canvas):
     raw = bytearray()
     for row in canvas:
         raw.append(0)
-        for r, g, b, a in row:
-            raw.extend([r, g, b, a])
+        for r, g, b, _ in row:
+            raw.extend([r, g, b])
 
     def chunk(kind, data):
         return (
@@ -90,7 +92,7 @@ def save_png(path, canvas):
         )
 
     png = b"\x89PNG\r\n\x1a\n"
-    png += chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0))
+    png += chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
     png += chunk(b"IDAT", zlib.compress(bytes(raw), 9))
     png += chunk(b"IEND", b"")
     with open(path, "wb") as f:
@@ -98,10 +100,12 @@ def save_png(path, canvas):
 
 
 def render(size):
-    canvas = [[(0, 0, 0, 0) for _ in range(size)] for _ in range(size)]
+    canvas = [[(224, 249, 238, 255) for _ in range(size)] for _ in range(size)]
     s = size / 512.0
 
-    ellipse(canvas, (92 * s, 362 * s, 420 * s, 442 * s), (0, 0, 0, 38))
+    ellipse(canvas, (30 * s, 30 * s, 482 * s, 482 * s), (246, 255, 247, 120))
+    stroke_ellipse(canvas, (30 * s, 30 * s, 482 * s, 482 * s), (144, 214, 186, 115), 8 * s)
+    ellipse(canvas, (92 * s, 362 * s, 420 * s, 442 * s), (0, 0, 0, 30))
     ellipse(canvas, (118 * s, 166 * s, 394 * s, 426 * s), (130, 223, 184, 255))
     stroke_ellipse(canvas, (118 * s, 166 * s, 394 * s, 426 * s), (67, 139, 109, 255), 12 * s)
     ellipse(canvas, (154 * s, 270 * s, 358 * s, 406 * s), (251, 226, 157, 255))
@@ -127,16 +131,7 @@ def render(size):
     return canvas
 
 
-def main():
-    if len(sys.argv) != 2:
-        print("usage: generate_icon.py OUTPUT.icns", file=sys.stderr)
-        sys.exit(2)
-    output = os.path.abspath(sys.argv[1])
-    build_dir = os.path.dirname(output)
-    os.makedirs(build_dir, exist_ok=True)
-
-    # Modern ICNS files can store PNG payloads. This avoids relying on iconutil
-    # accepting hand-authored PNGs on every runner.
+def write_icns_fallback(output, build_dir):
     chunks = []
     for size, code in [
         (16, b"icp4"),
@@ -156,6 +151,56 @@ def main():
     body = b"".join(chunks)
     with open(output, "wb") as f:
         f.write(b"icns" + struct.pack(">I", len(body) + 8) + body)
+
+
+def write_iconset(output, build_dir):
+    iconutil = shutil.which("iconutil")
+    if not iconutil:
+        write_icns_fallback(output, build_dir)
+        return
+
+    iconset_dir = os.path.join(build_dir, "AppIcon.iconset")
+    if os.path.isdir(iconset_dir):
+        shutil.rmtree(iconset_dir)
+    os.makedirs(iconset_dir, exist_ok=True)
+
+    for filename, size in [
+        ("icon_16x16.png", 16),
+        ("icon_16x16@2x.png", 32),
+        ("icon_32x32.png", 32),
+        ("icon_32x32@2x.png", 64),
+        ("icon_128x128.png", 128),
+        ("icon_128x128@2x.png", 256),
+        ("icon_256x256.png", 256),
+        ("icon_256x256@2x.png", 512),
+        ("icon_512x512.png", 512),
+        ("icon_512x512@2x.png", 1024),
+    ]:
+        save_png(os.path.join(iconset_dir, filename), render(size))
+
+    try:
+        subprocess.run(
+            [iconutil, "-c", "icns", iconset_dir, "-o", output],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except subprocess.CalledProcessError as error:
+        print(error.stderr.strip(), file=sys.stderr)
+        print("iconutil rejected the iconset; writing PNG-backed icns fallback.", file=sys.stderr)
+        write_icns_fallback(output, build_dir)
+
+
+def main():
+    if len(sys.argv) != 2:
+        print("usage: generate_icon.py OUTPUT.icns", file=sys.stderr)
+        sys.exit(2)
+    output = os.path.abspath(sys.argv[1])
+    build_dir = os.path.dirname(output)
+    os.makedirs(build_dir, exist_ok=True)
+
+    write_iconset(output, build_dir)
 
 
 if __name__ == "__main__":

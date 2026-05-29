@@ -19,5 +19,5 @@ jobs:
       - name: Upload app artifact
         uses: actions/upload-artifact@v6
         with:
-          name: FileFrogNative-macOS
-          path: build/FileFrogNative.dmg
+          name: FileFrog-macOS
+          path: build/FileFrog.dmg
