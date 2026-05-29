@@ -24,7 +24,8 @@ swift run FileFrogNative
 ```
 
 产物在 `build/FileFrogNative.app.zip`。
+同时会生成 `build/FileFrogNative.dmg`，推荐下载和分发 dmg。
 
 ## 线上打包
 
-推到 GitHub 后，进入 Actions，运行 `Build macOS App` workflow。完成后下载 artifact。
+推到 GitHub 后，进入 Actions，运行 `Build macOS App` workflow。完成后下载 `FileFrogNative-macOS` artifact，解压后打开 `FileFrogNative.dmg`。
